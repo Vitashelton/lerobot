@@ -1,0 +1,31 @@
+# Intel RealSense D435i Camera Configuration
+
+front_camera:
+  type: "intelrealsense"
+  serial_number_or_name: "401622073080"
+  fps: 15
+  width: 480
+  height: 640
+  use_depth: true
+  color_mode: "rgb"
+  rotation: 0
+  warmup_s: 5
+
+# Depth preprocessing
+depth:
+  min_range_m: 0.15
+  max_range_m: 5.0
+  median_filter_ksize: 5
+  hole_filling: true
+  temporal_smoothing_alpha: 0.3
+
+# Depth-to-scan parameters
+depth_to_scan:
+  scan_dim: 64
+  slice_fraction: 0.3           # middle horizontal band fraction
+  percentile: 10                # percentile pooling (avoid pure min)
+  temporal_smooth_alpha: 0.5
+  quality:
+    invalid_ratio_warn: 0.3
+    dropout_ratio_warn: 0.1
+    min_range_over_time_s: 2.0

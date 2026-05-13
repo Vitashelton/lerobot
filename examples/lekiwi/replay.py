@@ -1,20 +1,7 @@
 # !/usr/bin/env python
 
-# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import time
+import sys
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.robots.lekiwi.config_lekiwi import LeKiwiClientConfig
@@ -23,23 +10,39 @@ from lerobot.utils.constants import ACTION
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import log_say
 
-EPISODE_IDX = 0
+
+def get_arg(prefix, default):
+    for arg in sys.argv:
+        if arg.startswith(prefix + "="):
+            return arg.split("=", 1)[1]
+    return default
 
 
 def main():
-    # Initialize the robot config
-    robot_config = LeKiwiClientConfig(remote_ip="172.18.134.136", id="lekiwi")
+    # ===== 从命令行读取参数（没有就用默认）=====
+    EPISODE_IDX = int(get_arg("--control.episode", 0))
+    REPO_ID = get_arg("--control.repo_id", "akzhao1238/move_1")
+    FPS = int(get_arg("--control.fps", 30))
+    REMOTE_IP = get_arg("--robot.ip", "192.168.3.215")
 
-    # Initialize the robot
+    print(f"[INFO] repo_id = {REPO_ID}")
+    print(f"[INFO] episode = {EPISODE_IDX}")
+    print(f"[INFO] fps = {FPS}")
+    print(f"[INFO] robot_ip = {REMOTE_IP}")
+
+    # ===== 初始化机器人 =====
+    robot_config = LeKiwiClientConfig(remote_ip=REMOTE_IP, id="lekiwi")
     robot = LeKiwiClient(robot_config)
 
-    # Fetch the dataset to replay
-    dataset = LeRobotDataset("<hf_username>/<dataset_repo_id>", episodes=[EPISODE_IDX])
-    # Filter dataset to only include frames from the specified episode since episodes are chunked in dataset V3.0
-    episode_frames = dataset.hf_dataset.filter(lambda x: x["episode_index"] == EPISODE_IDX)
+    # ===== 加载数据集 =====
+    dataset = LeRobotDataset(REPO_ID, episodes=[EPISODE_IDX])
+
+    episode_frames = dataset.hf_dataset.filter(
+        lambda x: x["episode_index"] == EPISODE_IDX
+    )
     actions = episode_frames.select_columns(ACTION)
 
-    # Connect to the robot
+    # ===== 连接机器人 =====
     robot.connect()
 
     if not robot.is_connected:
@@ -47,18 +50,19 @@ def main():
 
     print("Starting replay loop...")
     log_say(f"Replaying episode {EPISODE_IDX}")
+
+    # ===== 回放动作 =====
     for idx in range(len(episode_frames)):
         t0 = time.perf_counter()
 
-        # Get recorded action from dataset
         action = {
-            name: float(actions[idx][ACTION][i]) for i, name in enumerate(dataset.features[ACTION]["names"])
+            name: float(actions[idx][ACTION][i])
+            for i, name in enumerate(dataset.features[ACTION]["names"])
         }
 
-        # Send action to robot
         _ = robot.send_action(action)
 
-        precise_sleep(max(1.0 / dataset.fps - (time.perf_counter() - t0), 0.0))
+        precise_sleep(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
 
     robot.disconnect()
 

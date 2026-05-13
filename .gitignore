@@ -177,3 +177,12 @@ outputs/
 *.urdf
 *.xml
 *.part
+Pi3/
+
+# Local large files
+*.deb
+*.pt
+get-docker.sh
+
+# Local nested project
+Pi3/

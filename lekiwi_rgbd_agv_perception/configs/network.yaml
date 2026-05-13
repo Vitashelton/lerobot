@@ -1,0 +1,24 @@
+# Network Configuration (for ZMQ streaming from Raspberry Pi to PC)
+
+network:
+  mode: "mock"                 # mock | zmq_client
+  # ZMQ client mode (receiving from Raspberry Pi + D435i)
+  zmq:
+    rgb_address: "tcp://192.168.3.215:5557"
+    depth_address: "tcp://192.168.3.215:5558"
+    cmd_address: "tcp://192.168.3.215:5555"
+    timeout_ms: 1000
+    conflation: true
+
+  # ZMQ server mode (running on Raspberry Pi, sending to PC)
+  zmq_server:
+    rgb_port: 5557
+    depth_port: 5558
+    cmd_port: 5555
+    bind_address: "*"
+
+# Web dashboard
+dashboard:
+  host: "0.0.0.0"
+  port: 5000
+  debug: false

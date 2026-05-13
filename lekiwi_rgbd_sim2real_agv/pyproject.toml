@@ -1,0 +1,30 @@
+[project]
+name = "lekiwi-rgbd-sim2real-agv"
+version = "0.1.0"
+description = "AGV perception and safe navigation system extending LeRobot LeKiwi with Intel RealSense D435i RGB-D"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    "pyrealsense2>=2.54",
+    "pyzmq>=25",
+    "draccus>=0.6",
+    "matplotlib>=3.7",
+    "scipy>=1.10",
+    "torch>=2.0",
+    "gymnasium>=0.29",
+    "mujoco>=3.0",
+    "ultralytics>=8.0",
+    "flask>=3.0",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+sim = ["mujoco>=3.0"]
+learning = ["torch>=2.0"]
+real = ["pyrealsense2>=2.54", "ultralytics>=8.0"]
+dash = ["flask>=3.0"]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"

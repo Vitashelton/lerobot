@@ -1,0 +1,44 @@
+# Visualization Configuration
+
+visualization:
+  show_rgb: true
+  show_depth: true
+  show_depth_colormap: true
+  show_topdown: true
+  show_text_panel: true
+  save_video: false
+  video_path: "logs/videos"
+  video_fps: 15
+  window_layout: "2x2"        # 2x2 grid: RGB | Depth | Topdown | Text
+  display_width: 1280
+  display_height: 720
+
+  # Depth colormap settings
+  depth_colormap: "jet"       # jet | viridis | plasma | inferno
+  depth_max_display: 3.0      # meters (clamp depth display)
+
+  # Top-down view settings
+  topdown:
+    size_meters: 4.0           # meters (4m x 4m top-down view)
+    pixels_per_meter: 150
+    show_robot: true
+    show_obstacles: true
+    show_targets: true
+    show_tracks: true
+    show_safety_zone: true
+    max_track_history: 50      # frames of track history to show
+
+  # Detection overlay
+  detection:
+    show_bbox: true
+    show_label: true
+    show_distance: true
+    show_3d_position: true
+    font_scale: 0.5
+    line_thickness: 2
+
+  # Text panel settings
+  text_panel:
+    font_face: 0               # cv2.FONT_HERSHEY_SIMPLEX
+    font_scale: 0.6
+    line_spacing: 20

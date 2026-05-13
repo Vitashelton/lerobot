@@ -1,0 +1,52 @@
+# LeKiwi Mobile Base Configuration
+# Omni-directional AGV base with x.vel, y.vel, theta.vel control interface
+
+robot:
+  type: "lekiwi"
+  id: "lekiwi_base_01"
+
+# Base kinematics
+base:
+  wheel_radius: 0.05
+  base_radius: 0.125
+  max_raw: 3000
+
+# Velocity limits
+velocity_limits:
+  x:
+    min: -0.3
+    max: 0.3
+  y:
+    min: -0.3
+    max: 0.3
+  theta:
+    min: -90.0
+    max: 90.0
+
+# ZMQ communication
+zmq:
+  host_ip: "0.0.0.0"
+  remote_ip: "192.168.1.100"
+  port_cmd: 5555
+  port_observations: 5556
+  connection_time_s: 30
+  watchdog_timeout_ms: 500
+  max_loop_freq_hz: 30
+
+# Teleoperation keys
+teleop:
+  forward: "w"
+  backward: "s"
+  left: "a"
+  right: "d"
+  rotate_left: "z"
+  rotate_right: "x"
+  speed_up: "r"
+  speed_down: "f"
+  quit: "q"
+
+# Speed presets
+speed_levels:
+  - { xy: 0.1, theta: 30 }
+  - { xy: 0.2, theta: 60 }
+  - { xy: 0.3, theta: 90 }

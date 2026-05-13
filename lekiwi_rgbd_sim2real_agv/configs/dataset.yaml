@@ -1,0 +1,47 @@
+# Dataset Configuration
+
+dataset:
+  repo_id: "lekiwi_rgbd_agv"
+  version: "1.0.0"
+  fps: 15
+
+  # Observation structure
+  observation:
+    state:
+      - "x.vel"
+      - "y.vel"
+      - "theta.vel"
+      - "scan64"
+      - "front_min"
+      - "left_min"
+      - "right_min"
+      - "pallet_x"
+      - "pallet_y"
+      - "pallet_z"
+      - "pallet_yaw"
+    images:
+      front:
+        height: 640
+        width: 480
+        channels: 3
+
+  # Action structure
+  action:
+    - "x.vel"
+    - "y.vel"
+    - "theta.vel"
+
+  # Sidecar data (not in main dataset, saved alongside)
+  sidecar:
+    depth_png: true
+    depth_npy: false
+    detections_jsonl: true
+    tracks_jsonl: true
+
+  # Episodes
+  episode:
+    max_steps: 500
+    split_ratio:
+      train: 0.7
+      val: 0.15
+      test: 0.15

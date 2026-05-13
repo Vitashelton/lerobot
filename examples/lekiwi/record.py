@@ -1,19 +1,7 @@
-# !/usr/bin/env python
+#!/usr/bin/env python
 
-# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
+import argparse
+import time
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
 from lerobot.processor import make_default_processors
@@ -21,121 +9,88 @@ from lerobot.robots.lekiwi.config_lekiwi import LeKiwiClientConfig
 from lerobot.robots.lekiwi.lekiwi_client import LeKiwiClient
 from lerobot.scripts.lerobot_record import record_loop
 from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
-from lerobot.teleoperators.so_leader import SO100Leader, SO100LeaderConfig
 from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
-from lerobot.utils.visualization_utils import init_rerun
 
-NUM_EPISODES = 2
-FPS = 30
-EPISODE_TIME_SEC = 30
-RESET_TIME_SEC = 10
-TASK_DESCRIPTION = "My task description"
-HF_REPO_ID = "<hf_username>/<dataset_repo_id>"
-
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--control.repo_id", dest="repo_id", type=str, default="akzhao1238/pure_nav_test")
+    parser.add_argument("--control.num_episodes", dest="num_episodes", type=int, default=30)
+    parser.add_argument("--control.episode_time_s", dest="episode_time_s", type=int, default=60)
+    parser.add_argument("--control.reset_time_s", dest="reset_time_s", type=int, default=10)
+    parser.add_argument("--control.single_task", dest="single_task", type=str, default="navigate")
+    parser.add_argument("--control.fps", dest="fps", type=int, default=10) 
+    parser.add_argument("--control.tags", dest="tags", type=str, default='["nav"]')
+    return parser.parse_args()
 
 def main():
-    # Create the robot and teleoperator configurations
-    robot_config = LeKiwiClientConfig(remote_ip="172.18.134.136", id="lekiwi")
-    leader_arm_config = SO100LeaderConfig(port="/dev/tty.usbmodem585A0077581", id="my_awesome_leader_arm")
+    args = parse_args()
+    HF_REPO_ID = args.repo_id
+
+    # 1. 配置小车
+    robot_config = LeKiwiClientConfig(remote_ip="192.168.3.215", id="lekiwi")
+    
+    # 2. 配置遥控设备（只留键盘！）
     keyboard_config = KeyboardTeleopConfig()
 
-    # Initialize the robot and teleoperator
+    # 3. 实例化设备（只留小车和键盘！）
     robot = LeKiwiClient(robot_config)
-    leader_arm = SO100Leader(leader_arm_config)
     keyboard = KeyboardTeleop(keyboard_config)
 
-    # TODO(Steven): Update this example to use pipelines
+    # 4. 预处理器逻辑
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
-    # Configure the dataset features
     action_features = hw_to_dataset_features(robot.action_features, ACTION)
     obs_features = hw_to_dataset_features(robot.observation_features, OBS_STR)
     dataset_features = {**action_features, **obs_features}
 
-    # Create the dataset
+    # 5. 创建数据集
     dataset = LeRobotDataset.create(
         repo_id=HF_REPO_ID,
-        fps=FPS,
+        fps=args.fps,
         features=dataset_features,
         robot_type=robot.name,
         use_videos=True,
-        image_writer_threads=4,
+        image_writer_threads=8,
     )
 
-    # Connect the robot and teleoperator
-    # To connect you already should have this script running on LeKiwi: `python -m lerobot.robots.lekiwi.lekiwi_host --robot.id=my_awesome_kiwi`
+    print("\n[INFO] 正在连接设备...")
     robot.connect()
-    leader_arm.connect()
-    keyboard.connect()
+    keyboard.connect()  # 只连键盘！
 
-    # Initialize the keyboard listener and rerun visualization
     listener, events = init_keyboard_listener()
-    init_rerun(session_name="lekiwi_record")
 
-    if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
-        raise ValueError("Robot or teleop is not connected!")
-
-    print("Starting record loop...")
     recorded_episodes = 0
-    while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
+    while recorded_episodes < args.num_episodes and not events["stop_recording"]:
         log_say(f"Recording episode {recorded_episodes}")
 
-        # Main record loop
         record_loop(
             robot=robot,
             events=events,
-            fps=FPS,
+            fps=args.fps,
             dataset=dataset,
-            teleop=[leader_arm, keyboard],
-            control_time_s=EPISODE_TIME_SEC,
-            single_task=TASK_DESCRIPTION,
-            display_data=True,
+            teleop=[keyboard],  # 只传键盘！
+            control_time_s=args.episode_time_s,
+            single_task=args.single_task,
+            display_data=False,
             teleop_action_processor=teleop_action_processor,
             robot_action_processor=robot_action_processor,
             robot_observation_processor=robot_observation_processor,
         )
 
-        # Reset the environment if not stopping or re-recording
-        if not events["stop_recording"] and (
-            (recorded_episodes < NUM_EPISODES - 1) or events["rerecord_episode"]
-        ):
-            log_say("Reset the environment")
-            record_loop(
-                robot=robot,
-                events=events,
-                fps=FPS,
-                teleop=[leader_arm, keyboard],
-                control_time_s=RESET_TIME_SEC,
-                single_task=TASK_DESCRIPTION,
-                display_data=True,
-                teleop_action_processor=teleop_action_processor,
-                robot_action_processor=robot_action_processor,
-                robot_observation_processor=robot_observation_processor,
-            )
-
         if events["rerecord_episode"]:
-            log_say("Re-record episode")
-            events["rerecord_episode"] = False
-            events["exit_early"] = False
             dataset.clear_episode_buffer()
+            events["rerecord_episode"] = False
             continue
 
-        # Save episode
         dataset.save_episode()
         recorded_episodes += 1
 
-    # Clean up
-    log_say("Stop recording")
-    robot.disconnect()
-    leader_arm.disconnect()
-    keyboard.disconnect()
-    listener.stop()
-
     dataset.finalize()
     dataset.push_to_hub()
-
+    print("🎉 录制结束，数据集已上传！")
 
 if __name__ == "__main__":
     main()
+

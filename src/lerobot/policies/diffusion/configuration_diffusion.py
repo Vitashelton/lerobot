@@ -108,6 +108,19 @@ class DiffusionConfig(PreTrainedConfig):
     horizon: int = 16
     n_action_steps: int = 8
 
+    input_shapes: dict[str, list[int]] = field(
+        default_factory=lambda: {
+            "observation.image": [6, 480, 640],  
+            "observation.state": [3],  
+        }
+    )
+
+    output_shapes: dict[str, list[int]] = field(
+        default_factory=lambda: {
+            "action": [6], 
+        }
+    )
+
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
             "VISUAL": NormalizationMode.MEAN_STD,

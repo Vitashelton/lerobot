@@ -1,0 +1,56 @@
+# Simulation Configuration
+
+# Synthetic RGB-D generator
+synthetic:
+  image_width: 480
+  image_height: 640
+  num_scenes: 1000
+  scenes:
+    - warehouse_aisle
+    - lab_cluttered
+    - pallet_pickup
+  elements:
+    - wall
+    - box
+    - pallet
+    - shelf
+    - chair
+    - person_obstacle
+  depth_noise_std_mm: 5.0
+  dropout_probability: 0.02
+  camera_height_range: [0.3, 0.6]
+  camera_pitch_range: [-5.0, 10.0]
+  lighting_variation: true
+  output_dir: "data/synthetic"
+
+# MuJoCo LeKiwi environment
+mujoco:
+  env_id: "LeKiwiScan-v0"
+  max_episode_steps: 500
+  worlds:
+    - lab_empty
+    - warehouse_aisle
+    - pallet_pickup
+    - cluttered_lab
+  action_space:
+    vx: [-0.3, 0.3]
+    vy: [-0.3, 0.3]
+    omega: [-90, 90]
+  observation:
+    scan_dim: 64
+    include_goal: true
+    include_velocity: true
+    include_last_action: true
+  reward:
+    progress_weight: 1.0
+    collision_penalty: -10.0
+    clearance_weight: 0.1
+    smoothness_penalty: -0.05
+    spin_penalty: -0.02
+
+# Gazebo
+gazebo:
+  enabled: false
+  ros2_bridge: false
+  worlds_dir: "sim/gazebo/worlds"
+  models_dir: "sim/gazebo/models"

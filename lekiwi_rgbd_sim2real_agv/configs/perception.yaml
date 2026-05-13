@@ -1,0 +1,47 @@
+# Perception Configuration
+
+# Obstacle detection
+obstacle:
+  scan_dim: 64
+  sectors:
+    left:   [0, 21]       # left third
+    front:  [21, 43]      # center third
+    right:  [43, 64]      # right third
+  risk_thresholds:
+    safe:    1.0           # meters
+    warning:  0.5
+    danger:   0.2
+
+# ArUco pallet detection
+aruco:
+  dictionary: "DICT_4X4_50"
+  marker_size_m: 0.12
+  camera_matrix_path: null      # auto-calibrate if null
+  valid_ids: [0, 1, 2, 3, 4]
+  min_detection_confidence: 0.7
+
+# YOLO object detection
+yolo:
+  model_path: "yolov8n.pt"
+  classes: [0, 56, 60]          # person, chair, box (COCO)
+  confidence_threshold: 0.5
+  depth_percentile: 20          # for per-bbox depth estimation
+  nms_iou_threshold: 0.45
+
+# Depth localizer
+depth_localizer:
+  roi_center_ratio: 0.4        # center crop ratio for depth
+  depth_aggregation: "median"  # median | percentile_10 | percentile_20
+
+# Tracker
+tracker:
+  max_disappeared: 30
+  kalman_dt: 0.1
+  kalman_process_noise: 0.03
+  kalman_measurement_noise: 0.1
+
+# Safety zones
+safety_zone:
+  stop_distance_m: 0.15
+  slow_down_distance_m: 0.5
+  lateral_inhibit_distance_m: 0.3

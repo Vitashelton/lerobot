@@ -1,0 +1,24 @@
+# Multi-Object Tracking Configuration
+
+tracking:
+  tracker_type: "centroid"     # centroid | kalman
+  max_missing_frames: 10       # frames before track is deleted
+  max_distance: 50             # max pixel distance for association
+  min_hits: 3                  # min detections before track is confirmed
+  iou_threshold: 0.3           # IOU threshold for matching
+
+# Kalman filter parameters
+kalman:
+  dt: 0.033                    # time step (1/30 fps)
+  # Process noise covariance
+  process_noise_pos: 0.01
+  process_noise_vel: 0.1
+  # Measurement noise covariance
+  measurement_noise_pos: 0.05
+  # State: [x, y, z, vx, vy, vz]
+  initial_velocity: [0.0, 0.0, 0.0]
+
+# Centroid tracker parameters
+centroid:
+  max_disappeared: 10
+  max_distance: 50

@@ -1,22 +1,12 @@
 # !/usr/bin/env python
 
-# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+import argparse
 from lerobot.datasets.utils import hw_to_dataset_features
-from lerobot.policies.act.modeling_act import ACTPolicy
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+# 🔥 核心修复一：将 ACTPolicy 改为 DiffusionPolicy
+from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
+
 from lerobot.policies.factory import make_pre_post_processors
 from lerobot.processor import make_default_processors
 from lerobot.robots.lekiwi import LeKiwiClient, LeKiwiClientConfig
@@ -26,29 +16,63 @@ from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
 
-NUM_EPISODES = 2
-FPS = 30
-EPISODE_TIME_SEC = 60
-TASK_DESCRIPTION = "My task description"
-HF_MODEL_ID = "<hf_username>/<model_repo_id>"
-HF_DATASET_ID = "<hf_username>/<eval_dataset_repo_id>"
+def parse_args():
+    parser = argparse.ArgumentParser()
+    # 兼容你命令行里的占位符参数 (不影响主逻辑，但保证你不报错)
+    parser.add_argument("--robot.type", type=str, default="lekiwi")
+    parser.add_argument("--control.type", type=str, default="record")
+    parser.add_argument("--control.tags", type=str, default='["eval"]')
+    parser.add_argument("--control.warmup_time_s", type=int, default=5)
+    parser.add_argument("--control.push_to_hub", type=str, default="true")
 
+    # 核心映射参数
+    parser.add_argument("--control.fps", dest="fps", type=int, default=30)
+    parser.add_argument("--control.single_task", dest="single_task", type=str, default="navigate")
+    parser.add_argument("--control.repo_id", dest="repo_id", type=str, required=True, help="相当于原来的 HF_DATASET_ID")
+    parser.add_argument("--control.episode_time_s", dest="episode_time_s", type=int, default=30)
+    parser.add_argument("--control.reset_time_s", dest="reset_time_s", type=int, default=6)
+    parser.add_argument("--control.num_episodes", dest="num_episodes", type=int, default=10)
+    parser.add_argument("--control.policy.path", dest="policy_path", type=str, required=True, help="相当于原来的 HF_MODEL_ID")
+
+    return parser.parse_args()
 
 def main():
-    # Create the robot configuration & robot
-    robot_config = LeKiwiClientConfig(remote_ip="172.18.134.136", id="lekiwi")
+    args = parse_args()
+
+    # 将命令行参数绑定到运行变量
+    NUM_EPISODES = args.num_episodes
+    FPS = args.fps
+    EPISODE_TIME_SEC = args.episode_time_s
+    RESET_TIME_SEC = args.reset_time_s
+    TASK_DESCRIPTION = args.single_task
+    HF_DATASET_ID = args.repo_id
+    HF_MODEL_ID = args.policy_path
+
+    print(f"\n🚀 [INFO] 启动模型评估部署模式...")
+    print(f"👉 模型权重加载路径: {HF_MODEL_ID}")
+    print(f"👉 评估数据集上传至: {HF_DATASET_ID}")
+    print(f"👉 任务描述: {TASK_DESCRIPTION}")
+
+    # 1. 初始化底盘配置
+    robot_config = LeKiwiClientConfig(remote_ip="192.168.3.215", id="lekiwi")
+    
+    # 🔥 强杀腕部相机的护体神功
+    if "wrist" in robot_config.cameras:
+        del robot_config.cameras["wrist"]
+        print("🛡️ [INFO] 已移除腕部相机 (wrist) 订阅。")
 
     robot = LeKiwiClient(robot_config)
 
-    # Create policy
-    policy = ACTPolicy.from_pretrained(HF_MODEL_ID)
+    # 2. 加载训练好的策略模型
+    print("\n🧠 [INFO] 正在将 Diffusion 模型加载至 GPU...")
+    # 🔥 核心修复二：使用 DiffusionPolicy 的加载器
+    policy = DiffusionPolicy.from_pretrained(HF_MODEL_ID)
 
-    # Configure the dataset features
+    # 3. 配置数据集特征
     action_features = hw_to_dataset_features(robot.action_features, ACTION)
     obs_features = hw_to_dataset_features(robot.observation_features, OBS_STR)
     dataset_features = {**action_features, **obs_features}
 
-    # Create the dataset
     dataset = LeRobotDataset.create(
         repo_id=HF_DATASET_ID,
         fps=FPS,
@@ -58,60 +82,44 @@ def main():
         image_writer_threads=4,
     )
 
-    # Build Policy Processors
+    # 4. 构建数据预处理器与后处理器
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=policy,
         pretrained_path=HF_MODEL_ID,
         dataset_stats=dataset.meta.stats,
-        # The inference device is automatically set to match the detected hardware, overriding any previous device settings from training to ensure compatibility.
         preprocessor_overrides={"device_processor": {"device": str(policy.config.device)}},
     )
 
-    # Connect the robot
-    # To connect you already should have this script running on LeKiwi: `python -m lerobot.robots.lekiwi.lekiwi_host --robot.id=my_awesome_kiwi`
+    # 5. 连接物理设备
+    print("\n[INFO] 正在连接 Lekiwi 底盘...")
     robot.connect()
 
-    # TODO(Steven): Update this example to use pipelines
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
-    # Initialize the keyboard listener and rerun visualization
     listener, events = init_keyboard_listener()
     init_rerun(session_name="lekiwi_evaluate")
 
-    if not robot.is_connected:
-        raise ValueError("Robot is not connected!")
+    try:
+        if not robot.is_connected:
+            raise ValueError("❌ [ERROR] 树莓派底盘未连接！")
 
-    print("Starting evaluate loop...")
-    recorded_episodes = 0
-    while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
-        log_say(f"Running inference, recording eval episode {recorded_episodes} of {NUM_EPISODES}")
+        print("\n========================================================")
+        print("✅ 模型推理就绪！双手离开键盘，看小车的表演吧！")
+        print("========================================================\n")
+        
+        recorded_episodes = 0
+        while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
+            log_say(f"Running inference, recording eval episode {recorded_episodes} of {NUM_EPISODES}")
 
-        # Main record loop
-        record_loop(
-            robot=robot,
-            events=events,
-            fps=FPS,
-            policy=policy,
-            preprocessor=preprocessor,  # Pass the pre and post policy processors
-            postprocessor=postprocessor,
-            dataset=dataset,
-            control_time_s=EPISODE_TIME_SEC,
-            single_task=TASK_DESCRIPTION,
-            display_data=True,
-            teleop_action_processor=teleop_action_processor,
-            robot_action_processor=robot_action_processor,
-            robot_observation_processor=robot_observation_processor,
-        )
-
-        # Reset the environment if not stopping or re-recording
-        if not events["stop_recording"] and (
-            (recorded_episodes < NUM_EPISODES - 1) or events["rerecord_episode"]
-        ):
-            log_say("Reset the environment")
+            # 实机闭环推理
             record_loop(
                 robot=robot,
                 events=events,
                 fps=FPS,
+                policy=policy,
+                preprocessor=preprocessor,  
+                postprocessor=postprocessor,
+                dataset=dataset,
                 control_time_s=EPISODE_TIME_SEC,
                 single_task=TASK_DESCRIPTION,
                 display_data=True,
@@ -120,25 +128,44 @@ def main():
                 robot_observation_processor=robot_observation_processor,
             )
 
-        if events["rerecord_episode"]:
-            log_say("Re-record episode")
-            events["rerecord_episode"] = False
-            events["exit_early"] = False
-            dataset.clear_episode_buffer()
-            continue
+            if not events["stop_recording"] and (
+                (recorded_episodes < NUM_EPISODES - 1) or events["rerecord_episode"]
+            ):
+                log_say("Reset the environment")
+                record_loop(
+                    robot=robot,
+                    events=events,
+                    fps=FPS,
+                    control_time_s=RESET_TIME_SEC,
+                    single_task=TASK_DESCRIPTION,
+                    display_data=True,
+                    teleop_action_processor=teleop_action_processor,
+                    robot_action_processor=robot_action_processor,
+                    robot_observation_processor=robot_observation_processor,
+                )
 
-        # Save episode
-        dataset.save_episode()
-        recorded_episodes += 1
+            if events["rerecord_episode"]:
+                log_say("Re-record episode")
+                events["rerecord_episode"] = False
+                events["exit_early"] = False
+                dataset.clear_episode_buffer()
+                continue
 
-    # Clean up
-    log_say("Stop recording")
-    robot.disconnect()
-    listener.stop()
+            dataset.save_episode()
+            recorded_episodes += 1
 
-    dataset.finalize()
-    dataset.push_to_hub()
+    finally:
+        log_say("Stop inference & recording")
+        robot.disconnect()
+        listener.stop()
 
+        if args.push_to_hub.lower() == "true":
+            print("\n[INFO] 正在打包评估数据并上传至 Hugging Face...")
+            dataset.finalize()
+            dataset.push_to_hub()
+            print("🎉 评估结束，数据已上传！")
+        else:
+            dataset.finalize()
 
 if __name__ == "__main__":
     main()

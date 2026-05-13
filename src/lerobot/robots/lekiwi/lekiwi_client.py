@@ -180,38 +180,46 @@ class LeKiwiClient(Robot):
             logging.error(f"Error decoding JSON observation: {e}")
             return None
 
-    def _decode_image_from_b64(self, image_b64: str) -> np.ndarray | None:
+    def _decode_image_from_b64(self, image_b64: str, is_depth: bool = False) -> np.ndarray | None:
         """Decodes a base64 encoded image string to an OpenCV image."""
         if not image_b64:
             return None
         try:
             jpg_data = base64.b64decode(image_b64)
             np_arr = np.frombuffer(jpg_data, dtype=np.uint8)
-            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            
+            # 🔥 核心修复 1：深度图必须使用 IMREAD_UNCHANGED 保留 16 位单通道原始数据
+            read_flag = cv2.IMREAD_UNCHANGED if is_depth else cv2.IMREAD_COLOR
+            frame = cv2.imdecode(np_arr, read_flag)
+            
             if frame is None:
                 logging.warning("cv2.imdecode returned None for an image.")
             return frame
         except (TypeError, ValueError) as e:
             logging.error(f"Error decoding base64 image data: {e}")
             return None
-
+        
     def _remote_state_from_obs(
         self, observation: dict[str, Any]
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         """Extracts frames, and state from the parsed observation."""
 
         flat_state = {key: observation.get(key, 0.0) for key in self._state_order}
-
         state_vec = np.array([flat_state[key] for key in self._state_order], dtype=np.float32)
-
         obs_dict: dict[str, Any] = {**flat_state, OBS_STATE: state_vec}
 
         # Decode images
         current_frames: dict[str, np.ndarray] = {}
         for cam_name, image_b64 in observation.items():
-            if cam_name not in self._cameras_ft:
+            # 🔥 核心修复 2：去掉 _depth 后缀再去查配置表，防止深度图被当成未知设备扔掉
+            base_cam_name = cam_name.replace("_depth", "")
+            if base_cam_name not in self._cameras_ft:
                 continue
-            frame = self._decode_image_from_b64(image_b64)
+            
+            # 标记这是否是一张深度图，并传给解码器
+            is_depth = "_depth" in cam_name
+            frame = self._decode_image_from_b64(image_b64, is_depth=is_depth)
+            
             if frame is not None:
                 current_frames[cam_name] = frame
 
@@ -253,21 +261,31 @@ class LeKiwiClient(Robot):
         return new_frames, new_state
 
     def get_observation(self) -> dict[str, Any]:
-        """
-        Capture observations from the remote robot: current follower arm positions,
-        present wheel speeds (converted to body-frame velocities: x, y, theta),
-        and a camera frame. Receives over ZMQ, translate to body-frame vel
-        """
         if not self._is_connected:
-            raise DeviceNotConnectedError("LeKiwiClient is not connected. You need to run `robot.connect()`.")
+            raise DeviceNotConnectedError("LeKiwiClient is not connected.")
 
         frames, obs_dict = self._get_data()
 
-        # Loop over each configured camera
         for cam_name, frame in frames.items():
+            # 🔥 核心修复 3：同样需要去掉 _depth 后缀来获取宽高配置
+            base_cam_name = cam_name.replace("_depth", "")
+            cfg = self.config.cameras[base_cam_name]
+            expected_h, expected_w = cfg.height, cfg.width
+            
+            is_depth = "_depth" in cam_name
+            
             if frame is None:
-                logging.warning("Frame is None")
-                frame = np.zeros((640, 480, 3), dtype=np.uint8)
+                # 动态造占位图：深度图是 1 通道 uint16，彩色图是 3 通道 uint8
+                channels = 1 if is_depth else 3
+                dtype = np.uint16 if is_depth else np.uint8
+                shape = (expected_h, expected_w) if channels == 1 else (expected_h, expected_w, channels)
+                frame = np.zeros(shape, dtype=dtype)
+            
+            if frame.shape[0] != expected_h or frame.shape[1] != expected_w:
+                # 深度图 resize 必须用 INTER_NEAREST (最近邻)，否则插值会凭空创造出错误的物理距离
+                interpolation = cv2.INTER_NEAREST if is_depth else cv2.INTER_LINEAR
+                frame = cv2.resize(frame, (expected_w, expected_h), interpolation=interpolation)
+                
             obs_dict[cam_name] = frame
 
         return obs_dict
@@ -308,27 +326,24 @@ class LeKiwiClient(Robot):
         pass
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        """Command lekiwi to move to a target joint configuration. Translates to motor space + sends over ZMQ
-
-        Args:
-            action (np.ndarray): array containing the goal positions for the motors.
-
-        Raises:
-            RobotDeviceNotConnectedError: if robot is not connected.
-
-        Returns:
-            np.ndarray: the action sent to the motors, potentially clipped.
-        """
         if not self._is_connected:
             raise DeviceNotConnectedError(
                 "ManipulatorRobot is not connected. You need to run `robot.connect()`."
             )
 
-        self.zmq_cmd_socket.send_string(json.dumps(action))  # action is in motor space
+        def clean_value(v):
+            if hasattr(v, "item"): # 识别并转换 Tensor 和 Numpy 标量
+                return float(v.item())
+            return v
+        
+        safe_action = {k: clean_value(v) for k, v in action.items()}
+        # =======================================================
 
-        # TODO(Steven): Remove the np conversion when it is possible to record a non-numpy array value
-        actions = np.array([action.get(k, 0.0) for k in self._state_order], dtype=np.float32)
+        # 发送清洗后的数据
+        self.zmq_cmd_socket.send_string(json.dumps(safe_action)) 
 
+        # 保持原本的逻辑不变，用于内部状态记录
+        actions = np.array([safe_action.get(k, 0.0) for k in self._state_order], dtype=np.float32)
         action_sent = {key: actions[i] for i, key in enumerate(self._state_order)}
         action_sent[ACTION] = actions
         return action_sent

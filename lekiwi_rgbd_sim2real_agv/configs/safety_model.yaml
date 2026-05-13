@@ -1,0 +1,35 @@
+# Safety Model Configuration
+
+model:
+  type: "mlp"
+  hidden_dims: [128, 64, 32]
+  activation: "relu"
+  dropout: 0.1
+  input:
+    scan_dim: 64
+    action_dim: 3
+    goal_dim: 3
+    velocity_dim: 3
+    last_action_dim: 3
+  output:
+    delta_action_dim: 3
+
+training:
+  batch_size: 64
+  learning_rate: 1e-4
+  weight_decay: 1e-5
+  epochs: 100
+  loss:
+    mse_weight: 1.0
+    collision_risk_weight: 0.5
+    smoothness_weight: 0.1
+  scheduler:
+    type: "cosine"
+    warmup_epochs: 5
+  early_stop_patience: 15
+  device: "cuda"
+
+inference:
+  device: "cpu"
+  quantize: false
+  batch_size: 1

@@ -1,0 +1,71 @@
+# Perception Pipeline Configuration
+
+# Depth preprocessing
+depth:
+  min_depth: 0.15              # meters
+  max_depth: 5.0               # meters
+  depth_scale: 0.001
+  use_median_filter: true
+  median_kernel: 5
+  use_temporal_smoothing: true
+  temporal_alpha: 0.5          # smoothing factor (0 = no update, 1 = no smoothing)
+  use_hole_filling: true
+  hole_filling_radius: 2
+
+# Obstacle detection
+obstacle:
+  # Zone definitions (fractions of image width)
+  zone_left: [0.0, 0.33]
+  zone_front: [0.33, 0.66]
+  zone_right: [0.66, 1.0]
+  # Distance thresholds (meters)
+  danger_distance: 0.25
+  warning_distance: 0.5
+  # Detection parameters
+  use_percentile: 10            # use 10th percentile instead of min (robust to noise)
+  min_obstacle_area: 200       # minimum connected component area in pixels
+  cluster_eps: 0.15            # DBSCAN epsilon for merging obstacle regions (meters)
+  connectivity: 8              # 4 or 8 connectivity for connected components
+
+# ArUco marker detection
+aruco:
+  enabled: true
+  dictionary: "DICT_4X4_50"    # DICT_4X4_50 | DICT_5X5_50 | DICT_6X6_50 | DICT_ARUCO_ORIGINAL
+  marker_size: 0.08            # meters (physical marker size for pose estimation)
+  detect_params:
+    adaptiveThreshWinSizeMin: 3
+    adaptiveThreshWinSizeMax: 23
+    adaptiveThreshWinSizeStep: 10
+    cornerRefinementMethod: 1  # CORNER_REFINE_SUBPIX
+
+# YOLO detection
+yolo:
+  enabled: true
+  model_path: "yolov8n.pt"     # relative or absolute path
+  confidence_threshold: 0.5
+  iou_threshold: 0.45
+  target_classes: ["box", "chair", "person", "bottle"]  # classes to report
+  device: "auto"               # auto | cpu | cuda:0
+
+# Pallet detection (color/shape based)
+pallet:
+  enabled: false
+  mode: "color"                # color | shape
+  # Color mode settings
+  color_ranges:
+    yellow:
+      lower: [20, 100, 100]
+      upper: [35, 255, 255]
+    blue:
+      lower: [100, 100, 100]
+      upper: [130, 255, 255]
+  min_area: 500
+  # Shape mode settings
+  shape_min_area: 1000
+  shape_approx_epsilon: 0.02
+
+# Depth localization
+localization:
+  method: "median"             # median | percentile_20 | mode
+  depth_sample_ratio: 0.3      # sample center portion of bbox for depth
+  min_valid_depth_ratio: 0.1   # minimum ratio of valid depth pixels in bbox
