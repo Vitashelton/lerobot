@@ -50,23 +50,34 @@ lekiwi_rgbd_sim2real_agv/
 
 ## Installation
 
+Requires the `lerobot` conda environment (with LeRobot and its dependencies already installed).
+
 ```bash
+conda activate lerobot
 cd lekiwi_rgbd_sim2real_agv
 pip install -e .
 
 # With optional dependencies
-pip install -e ".[sim,learning,real,dash]"
+pip install -e ".[camera]"       # pyrealsense2 (for real D435i)
+pip install -e ".[sim]"          # gymnasium + mujoco
+pip install -e ".[learning]"     # torch
+pip install -e ".[detection]"    # ultralytics YOLO
+pip install -e ".[dash]"         # flask web dashboard
+pip install -e ".[all]"          # everything
 ```
 
 ### Dependencies
 
-- Core: `numpy`, `opencv-python`, `pyzmq`, `draccus`, `scipy`
-- Real robot: `pyrealsense2`
-- Simulation: `gymnasium`, `mujoco`
-- Learning: `torch`
-- Detection: `ultralytics`
-- Dashboard: `flask`
-- LeRobot: `pip install lerobot` (from Hugging Face)
+| Extra | Packages | Purpose |
+|-------|----------|---------|
+| (core) | `numpy`, `opencv-python`, `pyzmq`, `draccus`, `scipy`, `tqdm` | Always required |
+| `[camera]` | `pyrealsense2` | Real D435i depth streaming |
+| `[sim]` | `gymnasium`, `mujoco` | Simulation environments |
+| `[learning]` | `torch` | Residual safety model training |
+| `[detection]` | `ultralytics` | YOLO object detection |
+| `[dash]` | `flask` | Web monitoring dashboard |
+
+LeRobot itself (`lerobot`) must be installed in the environment — this project extends it, not replaces it.
 
 ## Usage
 
