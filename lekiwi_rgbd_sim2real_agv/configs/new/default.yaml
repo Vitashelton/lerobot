@@ -1,0 +1,123 @@
+# Default configuration for multimodal offline RL navigation
+# All paths, hyperparameters, and model architecture settings
+
+experiment:
+  name: "multimodal_offline_nav"
+  seed: 42
+  device: "cuda"
+  output_dir: "experiments"
+  log_interval: 100
+  eval_interval: 1000
+  save_interval: 5000
+
+dataset:
+  name: "habitat_nav"           # habitat_nav | gnm | custom
+  data_dir: "data/lerobot"      # path to LeRobot-compatible dataset
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+  num_workers: 4
+  prefetch_factor: 2
+
+observation:
+  rgb:
+    enabled: true
+    height: 224
+    width: 224
+    channels: 3
+    normalize: true
+  scan64:
+    enabled: true
+    dim: 64
+    max_range: 5.0
+    min_range: 0.1
+  state:
+    enabled: true
+    dim: 3                    # [vx, vy, omega]
+  goal:
+    enabled: true
+    dim: 3                    # [dx, dy, dtheta] in robot frame
+  action_history:
+    enabled: false
+    horizon: 5
+    dim: 3
+
+action:
+  dim: 3                      # [vx, vy, omega]
+  vx_limits: [-0.3, 0.3]
+  vy_limits: [-0.3, 0.3]
+  omega_limits: [-90.0, 90.0] # deg/s
+
+model:
+  rgb_encoder:
+    backbone: "resnet18"      # resnet18 | resnet34 | efficientnet-b0
+    pretrained: true
+    output_dim: 256
+    freeze_bn: true
+  scan_encoder:
+    type: "mlp"               # mlp | cnn1d
+    hidden_dims: [128, 128, 128]
+    output_dim: 128
+    dropout: 0.1
+  state_encoder:
+    hidden_dims: [64, 64]
+    output_dim: 64
+  goal_encoder:
+    hidden_dims: [64, 64]
+    output_dim: 64
+  fusion:
+    method: "concat"          # concat | attention | film
+    hidden_dims: [512, 256]
+    output_dim: 256
+    dropout: 0.1
+  actor:
+    hidden_dims: [256, 256]
+    activation: "relu"
+    output_activation: "tanh"
+    init_std: 0.01
+  critic:
+    hidden_dims: [256, 256]
+    activation: "relu"
+    num_critics: 2            # twin critics for TD3 / IQL
+
+reward:
+  weights:
+    progress: 1.0
+    obstacle: 0.5
+    smoothness: 0.1
+    intervention: 1.0
+    collision: 5.0
+    success: 10.0
+  distances:
+    critical: 0.3             # m
+    warning: 0.8              # m
+    collision: 0.1            # m
+    goal_threshold: 0.5       # m
+    success_threshold: 0.5    # m
+
+safety:
+  stop_distance: 0.15         # m - emergency stop threshold
+  slow_distance: 0.5          # m - begin velocity scaling
+  lateral_inhibit_distance: 0.3  # m - block lateral motion
+  rotation_stop_multiplier: 1.5  # × stop_distance = rotation stop
+  max_velocity: [0.3, 0.3, 90.0]  # [vx, vy, omega_deg_s]
+  max_acceleration: [0.5, 0.5, 180.0]  # [ax, ay, alpha_deg_s2]
+  smoothing_alpha: 0.3
+  dt: 0.1                     # control period (s)
+  timeout_threshold: 0.5      # s
+  depth_invalid_timeout: 0.3  # s
+
+deployment:
+  lekiwi:
+    remote_ip: "192.168.1.100"
+    port_zmq_cmd: 5555
+    port_zmq_observations: 5556
+    max_linear_vel: 0.3
+    max_angular_vel: 90.0
+  camera:
+    width: 640
+    height: 480
+    fps: 15
+    use_depth: true
+    warmup_s: 5
+  mock_mode: false

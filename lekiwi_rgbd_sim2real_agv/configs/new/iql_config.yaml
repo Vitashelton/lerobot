@@ -1,0 +1,23 @@
+# IQL (Implicit Q-Learning) configuration
+# Inherits from default.yaml
+
+experiment:
+  name: "iql_multimodal_nav"
+
+algorithm:
+  name: "iql"
+  gamma: 0.99                # discount factor
+  tau: 0.005                 # target network soft update rate
+  expectile: 0.8             # τ in expectile regression, higher = more conservative
+  temperature: 3.0           # β in AWR, lower = more conservative
+  max_q_backup: false        # use max Q (vs expectile) for backup
+
+training:
+  num_epochs: 500
+  batch_size: 256
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  value_lr: 3.0e-4           # V-network learning rate
+  weight_decay: 1.0e-4
+  grad_clip_norm: 10.0
+  actor_delay: 2             # update actor every N critic updates

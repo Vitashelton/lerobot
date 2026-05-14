@@ -1,277 +1,296 @@
-# LeKiwi RGB-D Sim-to-Real AGV
+# LeKiwi Public Offline Nav RL
 
-AGV perception and safe navigation system extending [Hugging Face LeRobot](https://github.com/huggingface/lerobot) LeKiwi with Intel RealSense D435i RGB-D perception.
+**Multimodal Offline Reinforcement Learning for Safe Navigation of Low-Cost Mobile Robots from Public Visual Navigation Datasets**
+
+[![Python >= 3.10](https://img.shields.io/badge/python-%3E%3D3.10-blue)](https://python.org)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
 ## Overview
 
-This project builds a complete "simulation + real" pipeline for AGV safe navigation:
+This project learns safe visual navigation policies for the LeKiwi omnidirectional mobile robot **entirely from public datasets** — no large-scale real-robot data collection required.
+
+**Method**: Convert public visual navigation datasets (Habitat, GNM/ViNT) into LeRobot-compatible format → relabel rewards → train conservative offline RL (IQL, TD3+BC) with multimodal fusion (RGB + Scan64 + state + goal) → deploy with a rule-based safety filter on LeKiwi + Intel RealSense D435i.
 
 ```
-Synthetic RGB-D → MuJoCo/Gym LeKiwi → LeRobotDataset → residual safety model → real LeKiwi + D435i
+Public Dataset → LeRobot Format → Reward Relabeling → Multimodal Offline RL → Safety Filter → LeKiwi Deploy
 ```
 
-### Why this project?
+## Motivation
 
-- **LeRobot** already supports LeKiwi (omniwheel mobile manipulator) and RealSense cameras.
-- **LeKiwi's default camera config** uses `OpenCVCamera`, which does NOT provide depth.
-- **LeRobot's `RealSenseCameraConfig`** supports `use_depth=True`, but LeKiwi doesn't combine them out of the box.
-- This project extends LeKiwi + D435i with a full perception-to-control stack for AGV safety.
+Training safe visual navigation policies typically requires:
+- Large-scale real-robot data collection (**expensive, time-consuming**)
+- High-fidelity simulation environments (**complex to build**)
+- Expert demonstrations (**not always available**)
 
-### Key Features
+**This project asks**: Can we learn safe navigation policies from existing public datasets and deploy them on a low-cost robot (LeKiwi) with minimal real-robot data?
 
-| Module                        | Description                                                        |
-| ----------------------------- | ------------------------------------------------------------------ |
-| **D435i Depth-to-Scan**       | Convert RealSense depth to 64-D polar scan with percentile pooling |
-| **Obstacle Detection**        | Left/front/right sector risk assessment from depth scan            |
-| **ArUco Pallet Localization** | 3D pallet pose estimation via ArUco markers + depth                |
-| **YOLO Detection**            | Object detection (person, box, chair) with depth localization      |
-| **Synthetic RGB-D**           | Procedural warehouse/lab scene generator with depth noise          |
-| **MuJoCo LeKiwi Env**         | Gymnasium env for omniwheel AGV with scan observation              |
-| **Residual Safety Model**     | Small MLP that predicts safety corrections to raw actions          |
-| **DWA Policy**                | Dynamic Window Approach for omnidirectional navigation             |
-| **Emergency Shield**          | Hard safety layer: stop, slow-down, lateral inhibit                |
-| **Web Dashboard**             | Flask-based real-time monitoring (RGB, depth, scan, FPS)           |
-| **LeRobotDataset Writer**     | Record data in LeRobot-compatible format                           |
+## What This Project Is
 
-## Project Structure
+- A pipeline that converts public visual navigation datasets to **LeRobot-compatible** multimodal format
+- A **multimodal offline RL** framework (TD3+BC / IQL) incorporating RGB, Scan64, robot state, and goal
+- A **rule-based safety filter** as deployment safeguard
+- A **deployment stack** for LeKiwi with Intel RealSense D435i
+- **Small-scale real-robot validation** (5–10 scenarios)
+
+## What This Project Is NOT
+
+- NOT a diffusion policy project (data quality insufficient)
+- NOT a large-scale real-robot data collection project
+- NOT a full sim-to-real transfer framework
+- NOT an end-to-end learned safety approach (safety filter is rule-based)
+- NOT a claim that offline RL alone solves all navigation problems
+
+## Relation to Previous Work
+
+This project builds upon the `lekiwi_rgbd_sim2real_agv` codebase, which provides the **real-robot deployment stack**:
+
+| Module | Source | Role |
+|--------|--------|------|
+| D435i RGB-D perception | `perception/` | Camera interface |
+| Depth → Scan64 projection | `perception/depth_to_scan.py` | Virtual LiDAR |
+| ZMQ communication | `communication/` | Robot-server bridge |
+| Emergency safety shield | `control/emergency_shield.py` | Hard safety layer |
+| Action adapter | `control/action_adapter.py` | Velocity clipping/smoothing |
+| DWA policy | `control/dwa_policy.py` | Traditional baseline |
+
+The old deployment stack is reused as the **perception and execution layer** — not the main algorithmic contribution.
+
+## Directory Structure
 
 ```
-lekiwi_rgbd_sim2real_agv/
-  configs/             # YAML configuration files
-  lerobot_ext/         # LeKiwi + D435i config, host, client, dataset writer
-  camera/              # D435i depth processing pipeline
-  perception/          # Obstacle, ArUco, YOLO, tracker, safety zone
-  sim/                 # Synthetic RGB-D + MuJoCo envs + Gazebo placeholder
-  learning/            # Residual safety model training
-  control/             # DWA, emergency shield, residual controller
-  app/                 # Demo scripts + web dashboard
-  tools/               # Data collection, evaluation, comparison
+├── configs/                    # YAML configuration files
+│   └── new/                    # New thesis project configs
+│       ├── default.yaml        #   Default training config
+│       ├── iql_config.yaml     #   IQL hyperparameters
+│       └── td3bc_config.yaml   #   TD3+BC hyperparameters
+│
+├── data_adapters/              # Public dataset → unified format
+│   ├── base_adapter.py         #   Abstract base class
+│   ├── habitat_adapter.py      #   Habitat/HM3D adapter
+│   ├── gnm_adapter.py          #   GNM/ViNT adapter
+│   ├── data_splitter.py        #   Train/val/test split
+│   └── observation_normalizer.py  # Fit & apply normalization
+│
+├── lerobot_conversion/         # Unified format → LeRobotDataset
+│   ├── unified_to_lerobot.py   #   Main converter
+│   ├── lerobot_schema.py       #   Observation/action space schema
+│   └── validate_dataset.py     #   Integrity validation
+│
+├── reward/                     # Reward relabeling
+│   ├── reward_calculator.py    #   Core reward function
+│   ├── progress_estimator.py   #   Goal progress estimation
+│   ├── collision_detector.py   #   Collision detection
+│   └── intervention_labeler.py #   Intervention labeling
+│
+├── models/                     # Neural network modules
+│   ├── rgb_encoder.py          #   ResNet-18 RGB encoder
+│   ├── scan_encoder.py         #   1D-CNN/MLP Scan64 encoder
+│   ├── state_encoder.py        #   State vector encoder
+│   ├── goal_encoder.py         #   Goal vector encoder
+│   ├── fusion_module.py        #   Multimodal fusion
+│   ├── actor_network.py        #   Policy network
+│   ├── critic_network.py       #   Twin Q-networks
+│   └── model_factory.py        #   Build model from config
+│
+├── rl/                         # Offline RL algorithms
+│   ├── replay_buffer.py        #   Offline replay buffer
+│   ├── td3bc.py                #   TD3+BC implementation
+│   └── iql.py                  #   IQL implementation
+│
+├── safety/                     # Safety filter
+│   └── safety_filter.py        #   9-layer safety pipeline
+│
+├── baselines/                  # Baseline methods
+│   ├── behavior_cloning.py     #   BC baseline
+│   └── dwa_baseline.py         #   DWA wrapper
+│
+├── eval/                       # Evaluation
+│   ├── metrics.py              #   All metrics
+│   └── offline_evaluator.py    #   Offline evaluation loop
+│
+├── lekiwi_deployment/          # Real-robot deployment
+│   ├── observation_assembler.py  # Sensor → observation dict
+│   └── deployment_runner.py    #   Main deployment loop
+│
+├── scripts/                    # Entry-point scripts
+│   ├── convert_to_lerobot.py   #   Dataset conversion
+│   ├── train_iql.py            #   IQL training
+│   ├── train_td3bc.py          #   TD3+BC training
+│   ├── train_bc.py             #   BC training
+│   └── evaluate_offline.py     #   Offline evaluation
+│
+├── control/                    # (Reused) DWA, shield, adapter
+├── communication/              # (Reused) ZMQ host/client
+├── perception/                 # (Reused) D435i pipeline
+├── paper/                      # Thesis documents
+│   └── THESIS_PLAN.md          #   Full project plan
+│
+└── tests/                      # Unit tests
 ```
 
 ## Installation
 
-Requires the `lerobot` conda environment (with LeRobot and its dependencies already installed).
+Requires the `lerobot` conda environment:
 
 ```bash
 conda activate lerobot
 cd lekiwi_rgbd_sim2real_agv
-pip install -e .
-
-# With optional dependencies
-pip install -e ".[camera]"       # pyrealsense2 (for real D435i)
-pip install -e ".[sim]"          # gymnasium + mujoco
-pip install -e ".[learning]"     # torch
-pip install -e ".[detection]"    # ultralytics YOLO
-pip install -e ".[dash]"         # flask web dashboard
-pip install -e ".[all]"          # everything
+pip install -e ".[all]"
 ```
 
-### Dependencies
+Dependencies: `torch >= 2.0`, `torchvision`, `numpy`, `opencv-python`, `pyzmq`, `draccus`, `scipy`, `tqdm`, `pyyaml`, `h5py`.
 
-| Extra         | Packages                                                      | Purpose                        |
-| ------------- | ------------------------------------------------------------- | ------------------------------ |
-| (core)        | `numpy`, `opencv-python`, `pyzmq`, `draccus`, `scipy`, `tqdm` | Always required                |
-| `[camera]`    | `pyrealsense2`                                                | Real D435i depth streaming     |
-| `[sim]`       | `gymnasium`, `mujoco`                                         | Simulation environments        |
-| `[learning]`  | `torch`                                                       | Residual safety model training |
-| `[detection]` | `ultralytics`                                                 | YOLO object detection          |
-| `[dash]`      | `flask`                                                       | Web monitoring dashboard       |
+## Quick Start
 
-LeRobot itself (`lerobot`) must be installed in the environment — this project extends it, not replaces it.
-
-## Usage
-
-### 1. Synthetic RGB-D Generation
+### 1. Prepare Dataset
 
 ```bash
-python sim/synthetic_rgbd/render_dataset.py \
-    --output-dir data/synthetic \
-    --num-scenes 1000 \
-    --seed 42
+# Convert a Habitat dataset to LeRobot format
+python scripts/convert_to_lerobot.py \
+    --dataset habitat \
+    --data-dir data/raw/habitat \
+    --output-dir data/lerobot/habitat_nav
+
+# Or convert GNM/ViNT dataset
+python scripts/convert_to_lerobot.py \
+    --dataset gnm \
+    --format h5 \
+    --data-dir data/raw/gnm \
+    --output-dir data/lerobot/gnm_nav
 ```
 
-### 2. Sim Demo (Synthetic + DWA)
+### 2. Train
 
 ```bash
-python app/run_sim_demo.py \
-    --scene-type warehouse_aisle \
-    --num-episodes 5 \
-    --display
-```
+# Train IQL (recommended — naturally conservative)
+python scripts/train_iql.py \
+    --data-dir data/lerobot/habitat_nav \
+    --config configs/new/iql_config.yaml \
+    --output-dir checkpoints/iql_habitat \
+    --device cuda
 
-### 3. Real Demo (LeKiwi + D435i)
+# Train TD3+BC (comparison)
+python scripts/train_td3bc.py \
+    --data-dir data/lerobot/habitat_nav \
+    --config configs/new/td3bc_config.yaml \
+    --output-dir checkpoints/td3bc_habitat \
+    --device cuda
 
-```bash
-# On the LeKiwi host (Raspberry Pi / Jetson):
-python lerobot_ext/lekiwi_d435i_host.py \
-    robot:@lekiwi_d435i \
-    host:scan_dim=64 host:enable_aruco=true
-
-# On the control laptop:
-python app/run_real_demo.py \
-    --remote-ip 192.168.1.100 \
-    --safe-mode \
-    --display
-```
-
-### 4. Collect Real Dataset
-
-```bash
-python tools/collect_real_dataset.py \
-    --remote-ip 192.168.1.100 \
-    --output-dir data/real_logs \
-    --num-episodes 10 \
-    --teleop
-```
-
-### 5. Build Training Dataset
-
-```bash
-python learning/build_dataset.py \
-    --sim-data-dir data/synthetic \
-    --real-data-dir data/real_logs \
-    --output-dir data/training
-```
-
-### 6. Train Residual Safety Model
-
-```bash
-python learning/train_residual.py \
-    --data-dir data/training \
-    --output-dir checkpoints \
-    --epochs 100 \
+# Train BC baseline
+python scripts/train_bc.py \
+    --data-dir data/lerobot/habitat_nav \
+    --output-dir checkpoints/bc_habitat \
     --device cuda
 ```
 
-### 7. Evaluate Navigation
+### 3. Evaluate
 
 ```bash
-python tools/evaluate_navigation.py --results-dir demo_output/sim
+# Offline evaluation
+python scripts/evaluate_offline.py \
+    --checkpoint checkpoints/iql_habitat/best.pt \
+    --data-dir data/lerobot/habitat_nav_test \
+    --method iql \
+    --with-safety \
+    --output results/iql_offline.json
 ```
 
-### 8. Sim-to-Real Comparison
+### 4. Deploy on LeKiwi (Real Robot)
 
 ```bash
-python tools/sim_to_real_compare.py \
-    --sim-data data/sim_logs \
-    --real-data data/real_logs \
-    --output report/sim2real
+# On the LeKiwi host (Jetson / Raspberry Pi):
+python communication/host.py robot:@lekiwi_d435i
+
+# On the control laptop with GPU:
+python -c "
+from lekiwi_deployment.deployment_runner import DeploymentRunner
+from rl.iql import IQL
+from models.model_factory import ModelFactory
+import torch, yaml
+
+# Load model
+with open('configs/new/default.yaml') as f:
+    config = yaml.safe_load(f)
+model = ModelFactory.create(config)
+trainer = IQL(model, config, device='cuda')
+trainer.load_state_dict(torch.load('checkpoints/iql_habitat/best.pt'))
+
+# Run deployment
+runner = DeploymentRunner(trainer, config)
+result = runner.run_episode(goal_vector=np.array([3.0, 0.0, 0.0]))
+print(result['safety_stats'])
+"
 ```
 
-### 9. Offline Replay
+## Method Overview
 
-```bash
-python app/run_offline_replay.py --data-dir data/real_logs/episode_000
-```
-
-### 10. Export Demo Video
-
-```bash
-python tools/export_demo_video.py \
-    --input-dir demo_output/real \
-    --output demo.mp4
-```
-
-## Data Flow
+### Multimodal Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Phase 1: Perception & Data Pipeline                        │
-│                                                             │
-│  D435i ──→ depth_preprocess ──→ depth_to_scan ──→ scan64   │
-│    │                          │                             │
-│    ├─→ RGB ──→ ArUco/YOLO ──→ detections                   │
-│    │              │                                         │
-│    │              └─→ depth_localizer ──→ 3D positions      │
-│    │                                                        │
-│    └─→ LeKiwiDatasetWriter ──→ LeRobotDataset               │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│  Phase 2: Learning                                          │
-│                                                             │
-│  Synthetic ──→ Training Data ──→ ResidualSafetyModel        │
-│  Real Logs ──┘               ──→ risk_scorer labels         │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│  Phase 3: Control                                           │
-│                                                             │
-│  scan ──→ DWA Policy ──→ raw_action                         │
-│                           │                                 │
-│                           └─→ Residual Controller           │
-│                               │ (raw + residual_delta)      │
-│                               └─→ Emergency Shield          │
-│                                   │ (stop/slow/lateral)     │
-│                                   └─→ Action Adapter        │
-│                                       │ (clip/smooth)       │
-│                                       └─→ LeKiwi Base       │
-└─────────────────────────────────────────────────────────────┘
+RGB (3,224,224) ─→ ResNet-18 ──→ rgb_feat (256,)  ─┐
+Scan64 (64,)  ──→ 1D-CNN/MLP ─→ scan_feat (128,)  ─┤
+State (3,)    ──→ MLP ────────→ state_feat (64,)   ─┼─→ Fusion → Actor → [vx, vy, ω]
+Goal (3,)     ──→ MLP ────────→ goal_feat (64,)    ─┤
+                                                     │
+                                   Twin Critic ←────┘
 ```
 
-## Safety Architecture
+### Offline RL: IQL (Implicit Q-Learning)
 
-The safety stack has three layers:
+Naturally conservative — no OOD action sampling needed:
 
-1. **Emergency Shield** (hard, non-learned): Stops forward motion if `front_min < 0.15m`. Inhibits lateral motion if side clearance insufficient. Overrides everything.
+- **V(s)**: expectile regression `L2^τ(Q - V)` — controls conservatism via τ
+- **Q(s,a)**: standard Bellman backup with target V
+- **π(s)**: advantage-weighted regression — stays close to dataset
 
-2. **Residual Safety Model** (learned): MLP that predicts `delta_action` corrections to the raw DWA output. Trained to avoid collisions while preserving goal-directed behavior.
+### Safety Filter Pipeline
 
-3. **Action Adapter** (rule-based): Clips to velocity limits, enforces acceleration limits, applies low-pass temporal smoothing.
-
-## Phase Priority
-
-### Phase 1 (current)
-- [x] D435i depth-to-scan
-- [x] Obstacle detection
-- [x] ArUco pallet localization
-- [x] LeKiwi + D435i host/client
-- [x] Synthetic RGB-D generation
-- [x] Web dashboard
-- [x] Logging/replay
-
-### Phase 2 (planned)
-- [ ] MuJoCo LeKiwi env refinement
-- [ ] Residual safety model training & validation
-- [ ] Sim-to-real comparison & domain gap analysis
-- [ ] Real LeKiwi low-speed validation
-
-### Phase 3 (planned)
-- [ ] Gazebo/ROS2 system-level simulation
-- [ ] YOLO fine-tuning on warehouse objects
-- [ ] Complete AGV pallet approach demo
-
-## Key Design Decisions
-
-1. **Not modifying LeRobot main repo**: This project lives alongside LeRobot, reusing its abstractions without forking.
-
-2. **Depth stays local**: Raw depth images (640x480 uint16) are large. They are processed on-board and only the 64-D scan (bytes) and safety distances (floats) are sent over ZMQ.
-
-3. **Percentile pooling, not min**: The `depth_to_scan` uses 10th percentile, not minimum, to be robust to noise while still detecting thin obstacles.
-
-4. **Residual learning, not end-to-end**: The residual model corrects a DWA baseline rather than learning navigation from scratch. This is safer and requires less data.
-
-5. **Simulation-first training**: Synthetic data + MuJoCo provide large-scale training data before real-world validation.
-
-## Addition
-If TypeError: must be called with a dataclass type or instance
-```bash
-PYTHONPATH=$PWD python -m sim.synthetic_rgbd.render_dataset \
-    --output_dir data/synthetic \
-    --num_scenes 1000 \
-    --seed 42
 ```
-## License
+RL Action → Invalid Depth? → Emergency Stop? → Lateral Inhibit?
+→ Velocity Scaling → Rotation Stop → Clipping → Accel Limit → Smoothing
+→ Safe Action
+```
 
-Apache 2.0 (same as LeRobot)
+## Baselines
+
+1. **BC** — Behavior Cloning (MSE on actions)
+2. **TD3+BC w/o Fusion** — No RGB, no goal encoder
+3. **IQL w/o Safety** — Full model without safety filter
+4. **DWA** — Dynamic Window Approach (traditional planner)
+5. **Ours w/o Scan64** — RGB only (no depth/scan)
+6. **Ours w/o Safety Filter** — Full model, no safety
+7. **Ours (Full)** — IQL + multimodal + safety filter
+
+## Evaluation Metrics
+
+### Offline
+- Return (Σ γ^t r_t), success proxy, collision risk, unsafe action rate
+- Action smoothness, OOD action deviation, Q-value distribution
+
+### Real-Robot (Small-Scale)
+- Success rate, collision rate, min obstacle distance
+- Emergency stop count, intervention count, trajectory smoothness
+- Inference latency, CPU/GPU usage
 
 ## Citation
 
-If you use this work, please cite both this project and LeRobot:
-
 ```bibtex
+@mastersthesis{lekiwi_public_offline_nav_rl2026,
+  title  = {Multimodal Offline Reinforcement Learning for Safe Navigation
+            of Low-Cost Mobile Robots from Public Visual Navigation Datasets},
+  author = {[TBD]},
+  year   = {2026},
+  school = {[TBD]},
+}
+
 @misc{lerobot2024,
-  title = {LeRobot: State-of-the-art AI for real-world robotics},
+  title  = {LeRobot: State-of-the-art AI for Real-World Robotics},
   author = {Cadene, Remi and Alibert, Simon and So, Alexander and others},
-  year = {2024},
+  year   = {2024},
   publisher = {Hugging Face}
 }
 ```
+
+## License
+
+Apache 2.0 (same as LeRobot).

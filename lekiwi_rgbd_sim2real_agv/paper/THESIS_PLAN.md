@@ -46,38 +46,7 @@ The old project is **repositioned** as the **real-robot deployment and perceptio
 
 ### Architecture Diagram
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                     OFFLINE TRAINING (GPU Server)                   │
-│                                                                     │
-│  Public Dataset ──→ LeRobot Converter ──→ Reward Relabeling         │
-│                                              │                      │
-│  Multimodal Obs ──→ TD3+BC / IQL ──→ Conservative Policy           │
-│  (RGB+Scan+State+Goal)       │                                      │
-│                               │                                      │
-│                      Safety Filter (learned or rule-based)          │
-│                               │                                      │
-│                      LeKiwi Action Adapter                          │
-└───────────────────────────────┼──────────────────────────────────────┘
-                                │
-                                ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                  REAL-ROBOT DEPLOYMENT (LeKiwi + D435i)             │
-│                                                                     │
-│  D435i ──→ depth_to_scan ──→ Scan64 ──→ RL Policy ──→ raw_action   │
-│    │                                                    │           │
-│    └─→ RGB ─────────────────────────────────┐          │           │
-│                                              │          ▼           │
-│                                     Multimodal Obs    Emergency     │
-│                                     Construction     Shield        │
-│                                                       │            │
-│                                                       ▼            │
-│                                                  Action Adapter    │
-│                                                       │            │
-│                                                       ▼            │
-│                                                  LeKiwi Base       │
-└────────────────────────────────────────────────────────────────────┘
-```
+![架构图](img/offline_rl_lekiwi_architecture.drawio.png)
 
 ---
 

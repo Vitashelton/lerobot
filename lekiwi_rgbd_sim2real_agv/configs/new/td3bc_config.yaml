@@ -1,0 +1,22 @@
+# TD3+BC configuration
+# Inherits from default.yaml
+
+experiment:
+  name: "td3bc_multimodal_nav"
+
+algorithm:
+  name: "td3bc"
+  gamma: 0.99                # discount factor
+  tau: 0.005                 # target network soft update rate
+  alpha: 2.5                 # BC regularization weight (λ = α / avg_Q)
+  policy_noise: 0.2          # target policy smoothing noise std
+  noise_clip: 0.5            # target policy noise clip range
+  policy_delay: 2            # delayed policy updates
+
+training:
+  num_epochs: 500
+  batch_size: 256
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  weight_decay: 1.0e-4
+  grad_clip_norm: 10.0

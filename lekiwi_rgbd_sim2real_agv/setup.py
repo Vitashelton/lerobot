@@ -38,10 +38,10 @@ extras_require = {
 }
 
 setup(
-    name="lekiwi-rgbd-sim2real-agv",
-    version="0.1.0",
-    description="AGV perception and safe navigation system extending LeRobot LeKiwi with Intel RealSense D435i RGB-D",
-    author="LeKiwi RGB-D Sim2Real AGV Project",
+    name="lekiwi-public-offline-nav-rl",
+    version="0.2.0",
+    description="Multimodal Offline RL for Safe Navigation of Low-Cost Mobile Robots from Public Visual Navigation Datasets",
+    author="LeKiwi Public Offline Nav RL Project",
     python_requires=">=3.10",
     install_requires=install_requires,
     extras_require=extras_require,
@@ -55,6 +55,16 @@ setup(
             "app", "app.*",
             "tools", "tools.*",
             "experiments", "experiments.*",
+            "data_adapters", "data_adapters.*",
+            "lerobot_conversion", "lerobot_conversion.*",
+            "reward", "reward.*",
+            "models", "models.*",
+            "rl", "rl.*",
+            "safety", "safety.*",
+            "lekiwi_deployment", "lekiwi_deployment.*",
+            "baselines", "baselines.*",
+            "eval", "eval.*",
+            "scripts", "scripts.*",
         ]
     ),
     include_package_data=True,
