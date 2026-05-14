@@ -45,6 +45,7 @@ class DeploymentRunner:
         lekiwi_cfg = deploy_cfg.get("lekiwi", {})
         camera_cfg = deploy_cfg.get("camera", {})
         safety_cfg = config.get("safety", {})
+        observation_cfg = config.get("observation", {})
 
         # Observation assembler
         self.obs_assembler = ObservationAssembler(
@@ -52,8 +53,14 @@ class DeploymentRunner:
                 camera_cfg.get("height", 480),
                 camera_cfg.get("width", 640),
             ),
-            scan_dim=safety_cfg.get("stop_distance", 0.15),  # placeholder, will be corrected
+            scan_dim=int(
+                observation_cfg.get("scan64", {}).get("dim", 64)
+            ),
+            max_range=float(
+                observation_cfg.get("scan64", {}).get("max_range", 5.0)
+            ),
         )
+
 
         # Safety filter
         self.safety_filter = SafetyFilter(

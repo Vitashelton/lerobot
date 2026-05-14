@@ -40,9 +40,10 @@ class ObservationAssembler:
         max_range: float = 5.0,
     ) -> None:
         self.image_size = image_size
-        self.scan_dim = scan_dim
-        self.fov_deg = fov_deg
-        self.max_range = max_range
+        self.scan_dim = int(scan_dim)
+        self.fov_deg = float(fov_deg)
+        self.max_range = float(max_range)
+
         self.prev_action = np.zeros(3, dtype=np.float32)
 
     def assemble(
