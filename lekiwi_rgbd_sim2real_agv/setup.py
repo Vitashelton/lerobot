@@ -47,14 +47,14 @@ setup(
     extras_require=extras_require,
     packages=find_packages(
         include=[
-            "lerobot_ext", "lerobot_ext.*",
-            "camera", "camera.*",
+            "communication", "communication.*",
             "perception", "perception.*",
             "sim", "sim.*",
             "learning", "learning.*",
             "control", "control.*",
             "app", "app.*",
             "tools", "tools.*",
+            "experiments", "experiments.*",
         ]
     ),
     include_package_data=True,

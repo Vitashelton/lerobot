@@ -1,496 +1,720 @@
-"""Run simulation demo with synthetic RGB-D and LeKiwi DWA navigation."""
-from __future__ import annotations
+"""LeKiwi 2D navigation simulation demo.
 
-import logging
-import os
-import sys
+This is the main simulation demo:
+- real 2D robot pose update
+- holonomic LeKiwi action [vx, vy, omega]
+- ray-cast scan
+- DWA / rule / safety shield
+- collision / success / timeout metrics
+- top-down visualization
+"""
+
+import argparse
+import csv
+import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-import cv2
 import numpy as np
 
-import draccus
 
-# Ensure project root is on sys.path for sibling imports.
-_PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+# -----------------------------
+# CLI
+# -----------------------------
 
-from camera.realsense_reader import RealSenseReader
-from perception.obstacle_detector import ObstacleDetector
-
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    return str(v).lower() in ("true", "1", "yes", "y")
 
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--scene_type", type=str, default="warehouse_like",
+                   choices=["empty", "single_obstacle", "narrow_gap", "cluttered_lab", "warehouse_like"])
+    p.add_argument("--policy", type=str, default="dwa_shield",
+                   choices=["rule", "dwa", "dwa_shield", "mock_logoplanner", "full"])
+    p.add_argument("--num_episodes", type=int, default=5)
+    p.add_argument("--max_steps", type=int, default=300)
+    p.add_argument("--display", type=str2bool, default=True)
+    p.add_argument("--record_video", type=str2bool, default=False)
+    p.add_argument("--output_dir", type=str, default="logs/sim_demo")
+    p.add_argument("--seed", type=int, default=42)
+    return p.parse_args()
+
+
+# -----------------------------
+# Geometry
+# -----------------------------
 
 @dataclass
-class SimDemoConfig:
-    """CLI configuration for the simulation demo."""
+class RectObstacle:
+    x: float
+    y: float
+    w: float
+    h: float
+    name: str = "obstacle"
 
-    scene_type: str = "warehouse_aisle"
-    num_episodes: int = 5
-    max_steps: int = 500
-    display: bool = True
-    record_video: bool = False
-    output_dir: str = "demo_output/sim"
+    @property
+    def xmin(self):
+        return self.x - self.w / 2
+
+    @property
+    def xmax(self):
+        return self.x + self.w / 2
+
+    @property
+    def ymin(self):
+        return self.y - self.h / 2
+
+    @property
+    def ymax(self):
+        return self.y + self.h / 2
+
+    def contains_point(self, px, py):
+        return self.xmin <= px <= self.xmax and self.ymin <= py <= self.ymax
+
+    def circle_collision(self, cx, cy, r):
+        nearest_x = np.clip(cx, self.xmin, self.xmax)
+        nearest_y = np.clip(cy, self.ymin, self.ymax)
+        return (cx - nearest_x) ** 2 + (cy - nearest_y) ** 2 <= r ** 2
+
+    def distance_to_point(self, px, py):
+        dx = max(self.xmin - px, 0, px - self.xmax)
+        dy = max(self.ymin - py, 0, py - self.ymax)
+        return math.hypot(dx, dy)
 
 
-# ---------------------------------------------------------------------------
-# Simple DWA (Dynamic Window Approach) controller
-# ---------------------------------------------------------------------------
+# -----------------------------
+# 2D LeKiwi environment
+# -----------------------------
 
-class DWAController:
-    """Minimal Dynamic Window Approach for differential-drive navigation.
+class LeKiwi2DEnv:
+    def __init__(self, scene_type="warehouse_like", seed=42, max_steps=300):
+        self.scene_type = scene_type
+        self.rng = np.random.RandomState(seed)
+        self.max_steps = max_steps
 
-    Given a goal (x, y) in robot frame and a 1-D scan, it evaluates a set
-    of candidate (linear, angular) velocity pairs, scores them on:
-      - heading toward the goal,
-      - obstacle clearance,
-      - forward speed,
-    and returns the best action.
-    """
+        self.world_w = 5.0
+        self.world_h = 6.0
+        self.robot_radius = 0.18
+        self.dt = 0.08
 
-    def __init__(
-        self,
-        max_linear: float = 0.3,
-        max_angular: float = 90.0,
-        linear_samples: int = 11,
-        angular_samples: int = 21,
-        dt: float = 0.1,
-        predict_steps: int = 15,
-        goal_weight: float = 0.5,
-        clearance_weight: float = 1.0,
-        speed_weight: float = 0.1,
-        safe_distance: float = 0.3,
-    ):
-        self.max_linear = max_linear
-        self.max_angular = max_angular
-        self.linear_samples = linear_samples
-        self.angular_samples = angular_samples
-        self.dt = dt
-        self.predict_steps = predict_steps
-        self.goal_weight = goal_weight
-        self.clearance_weight = clearance_weight
-        self.speed_weight = speed_weight
-        self.safe_distance = safe_distance
+        self.scan_dim = 64
+        self.scan_fov = math.radians(100)
+        self.scan_max = 5.0
+        self.scan_min = 0.15
 
-    def plan(self, goal_x: float, goal_y: float, scan_m: np.ndarray) -> dict:
-        """Return (vx, omega_deg) and auxiliary info."""
-        lin_vels = np.linspace(-self.max_linear, self.max_linear, self.linear_samples)
-        ang_vels = np.linspace(-self.max_angular, self.max_angular, self.angular_samples)
+        self.max_vx = 0.35
+        self.max_vy = 0.25
+        self.max_w = 1.5
 
-        best_score = -np.inf
-        best_action = (0.0, 0.0)
-        best_info = {}
+        self.obstacles = []
+        self.pose = None
+        self.vel = np.zeros(3, dtype=np.float32)
+        self.last_action = np.zeros(3, dtype=np.float32)
+        self.goal = None
+        self.step_count = 0
+        self.trajectory = []
+        self.smoothness_acc = 0.0
+        self.spin_count = 0
+        self.path_length = 0.0
+        self.prev_dist_goal = None
+        self.min_clearance_seen = float("inf")
 
-        for v in lin_vels:
-            for w in ang_vels:
-                score, info = self._score(v, w, goal_x, goal_y, scan_m)
-                if score > best_score:
-                    best_score = score
-                    best_action = (v, w)
-                    best_info = info
+    def build_scene(self):
+        obs = []
+
+        if self.scene_type == "empty":
+            pass
+
+        elif self.scene_type == "single_obstacle":
+            obs.append(RectObstacle(2.5, 3.0, 0.55, 0.8, "box"))
+
+        elif self.scene_type == "narrow_gap":
+            obs.append(RectObstacle(2.5, 2.35, 1.1, 0.55, "left_box"))
+            obs.append(RectObstacle(2.5, 3.65, 1.1, 0.55, "right_box"))
+
+        elif self.scene_type == "cluttered_lab":
+            obs.extend([
+                RectObstacle(1.8, 2.0, 1.2, 0.6, "table"),
+                RectObstacle(2.9, 4.1, 0.6, 0.6, "chair"),
+                RectObstacle(3.6, 2.6, 0.7, 1.0, "box"),
+                RectObstacle(2.2, 3.4, 0.45, 0.45, "chair"),
+            ])
+
+        elif self.scene_type == "warehouse_like":
+            # two long shelves + one pallet
+            obs.extend([
+                RectObstacle(2.6, 0.75, 3.7, 0.45, "lower_shelf"),
+                RectObstacle(2.6, 5.25, 3.7, 0.45, "upper_shelf"),
+                RectObstacle(2.7, 3.0, 0.55, 0.85, "pallet"),
+            ])
+
+        return obs
+
+    def reset(self):
+        self.obstacles = self.build_scene()
+        self.pose = np.array([0.65, 3.0, 0.0], dtype=np.float32)
+
+        if self.scene_type == "narrow_gap":
+            self.goal = np.array([4.35, 3.0], dtype=np.float32)
+        elif self.scene_type == "cluttered_lab":
+            self.goal = np.array([4.4, 4.7], dtype=np.float32)
+        else:
+            self.goal = np.array([4.35, 3.0], dtype=np.float32)
+
+        self.vel[:] = 0
+        self.last_action[:] = 0
+        self.step_count = 0
+        self.trajectory = [self.pose[:2].copy()]
+        self.smoothness_acc = 0.0
+        self.spin_count = 0
+        self.path_length = 0.0
+        self.prev_dist_goal = self.distance_to_goal()
+        self.min_clearance_seen = float("inf")
+
+        return self.get_obs(), self.get_info(False, False, False)
+
+    def distance_to_goal(self):
+        return float(np.linalg.norm(self.goal - self.pose[:2]))
+
+    def in_bounds(self, x, y):
+        return self.robot_radius <= x <= self.world_w - self.robot_radius and self.robot_radius <= y <= self.world_h - self.robot_radius
+
+    def collision_at(self, x, y):
+        if not self.in_bounds(x, y):
+            return True
+        for ob in self.obstacles:
+            if ob.circle_collision(x, y, self.robot_radius):
+                return True
+        return False
+
+    def point_occupied(self, x, y):
+        if x < 0 or x > self.world_w or y < 0 or y > self.world_h:
+            return True
+        for ob in self.obstacles:
+            if ob.contains_point(x, y):
+                return True
+        return False
+
+    def raycast_scan(self, pose=None):
+        if pose is None:
+            pose = self.pose
+        x, y, th = float(pose[0]), float(pose[1]), float(pose[2])
+
+        scan = np.full(self.scan_dim, self.scan_max, dtype=np.float32)
+        angles = np.linspace(-self.scan_fov / 2, self.scan_fov / 2, self.scan_dim)
+
+        step = 0.025
+        for i, a in enumerate(angles):
+            global_a = th + a
+            d = self.scan_min
+            while d <= self.scan_max:
+                px = x + d * math.cos(global_a)
+                py = y + d * math.sin(global_a)
+                if self.point_occupied(px, py):
+                    scan[i] = d
+                    break
+                d += step
+
+        # small sensor noise
+        scan += self.rng.normal(0, 0.01, size=scan.shape).astype(np.float32)
+        scan = np.clip(scan, self.scan_min, self.scan_max)
+        return scan
+
+    def min_clearance(self):
+        x, y = self.pose[:2]
+        d = min(x, y, self.world_w - x, self.world_h - y)
+        for ob in self.obstacles:
+            d = min(d, ob.distance_to_point(x, y))
+        return float(max(0.0, d - self.robot_radius))
+
+    def get_obs(self):
+        scan = self.raycast_scan()
+        rel_goal_world = self.goal - self.pose[:2]
+
+        c, s = math.cos(-self.pose[2]), math.sin(-self.pose[2])
+        gx = c * rel_goal_world[0] - s * rel_goal_world[1]
+        gy = s * rel_goal_world[0] + c * rel_goal_world[1]
 
         return {
-            "x.vel": best_action[0],
-            "theta.vel": best_action[1],
-            "score": best_score,
-            "info": best_info,
+            "scan": scan,
+            "goal": np.array([gx, gy], dtype=np.float32),
+            "velocity": self.vel.copy(),
+            "last_action": self.last_action.copy(),
+            "pose": self.pose.copy(),
         }
 
-    def _score(self, v: float, w_deg: float, gx: float, gy: float, scan: np.ndarray) -> tuple[float, dict]:
-        """Score a (v, omega) pair by forward-simulating the trajectory."""
-        w_rad = np.deg2rad(w_deg)
-        x, y, theta = 0.0, 0.0, 0.0
-        min_clearance = float("inf")
+    def step(self, action):
+        self.step_count += 1
 
-        for _ in range(self.predict_steps):
-            # Kinematic update
-            x += v * np.cos(theta) * self.dt
-            y += v * np.sin(theta) * self.dt
-            theta += w_rad * self.dt
+        raw = np.asarray(action, dtype=np.float32)
+        raw[0] = np.clip(raw[0], -self.max_vx, self.max_vx)
+        raw[1] = np.clip(raw[1], -self.max_vy, self.max_vy)
+        raw[2] = np.clip(raw[2], -self.max_w, self.max_w)
 
-            # Check clearance: project position to polar and find closest scan bin
-            dist = np.hypot(x, y)
-            bearing = np.arctan2(y, x)
-            min_clearance = min(min_clearance, dist)
+        # action smoothing
+        alpha = 0.55
+        act = alpha * self.last_action + (1 - alpha) * raw
 
-            # Check against scan: using bearing to index into scan
-            scan_bearing_deg = np.rad2deg(bearing)
-            # Map bearing to scan index
-            n = len(scan)
-            fov_half = 87.0 / 2.0
-            idx = int((scan_bearing_deg + fov_half) / (87.0 / n))
-            if 0 <= idx < n and not np.isnan(scan[idx]):
-                if dist < scan[idx]:
-                    min_clearance = min(min_clearance, dist)
+        old_pose = self.pose.copy()
 
-        # Collision check
-        if min_clearance < self.safe_distance * 0.3:
-            return -1000.0, {"min_clearance": min_clearance, "heading_error": 0.0}
+        # robot-frame velocity to world-frame velocity
+        th = float(self.pose[2])
+        c, s = math.cos(th), math.sin(th)
+        vx_world = c * act[0] - s * act[1]
+        vy_world = s * act[0] + c * act[1]
 
-        # Heading score: how well does final heading point toward goal?
-        goal_dist = np.hypot(gx, gy)
-        goal_bearing = np.arctan2(gy, gx)
-        heading_error = abs(theta - goal_bearing)
-        heading_error = min(heading_error, 2 * np.pi - heading_error)
-        heading_score = max(0.0, 1.0 - heading_error / np.pi)
+        new_pose = self.pose.copy()
+        new_pose[0] += vx_world * self.dt
+        new_pose[1] += vy_world * self.dt
+        new_pose[2] += act[2] * self.dt
+        new_pose[2] = (new_pose[2] + math.pi) % (2 * math.pi) - math.pi
 
-        # Clearance score
-        clearance_score = min(1.0, min_clearance / self.safe_distance) if np.isfinite(min_clearance) else 0.0
+        collision = self.collision_at(new_pose[0], new_pose[1])
+        if not collision:
+            self.pose = new_pose
+            self.path_length += float(np.linalg.norm(self.pose[:2] - old_pose[:2]))
 
-        # Speed score
-        speed_score = abs(v) / self.max_linear if self.max_linear > 0 else 0.0
+        self.vel = act.copy()
+        self.smoothness_acc += float(np.linalg.norm(act - self.last_action))
+        self.last_action = act.copy()
+        self.trajectory.append(self.pose[:2].copy())
 
-        score = (
-            self.goal_weight * heading_score
-            + self.clearance_weight * clearance_score
-            + self.speed_weight * speed_score
+        dist_goal = self.distance_to_goal()
+        progress = self.prev_dist_goal - dist_goal
+        self.prev_dist_goal = dist_goal
+
+        clearance = self.min_clearance()
+        self.min_clearance_seen = min(self.min_clearance_seen, clearance)
+
+        if abs(act[2]) > 0.8 and np.linalg.norm(act[:2]) < 0.03:
+            self.spin_count += 1
+
+        success = dist_goal < 0.28
+        timeout = self.step_count >= self.max_steps
+
+        reward = 4.0 * progress
+        reward += 10.0 if success else 0.0
+        reward -= 10.0 if collision else 0.0
+        reward -= 0.05 * np.linalg.norm(act - self.last_action)
+        reward -= 0.02 if clearance < 0.25 else 0.0
+        reward -= 0.02 if self.spin_count > 0 else 0.0
+
+        done = success or collision or timeout
+        return self.get_obs(), reward, done, False, self.get_info(success, collision, timeout)
+
+    def get_info(self, success, collision, timeout):
+        return {
+            "success": bool(success),
+            "collision": bool(collision),
+            "timeout": bool(timeout),
+            "min_clearance": float(self.min_clearance()),
+            "min_clearance_seen": float(self.min_clearance_seen),
+            "path_length": float(self.path_length),
+            "smoothness": float(self.smoothness_acc),
+            "spin_count": int(self.spin_count),
+            "step": int(self.step_count),
+            "dist_goal": float(self.distance_to_goal()),
+        }
+
+
+# -----------------------------
+# Policies
+# -----------------------------
+
+def sector_mins(scan):
+    n = len(scan)
+    right = np.min(scan[: n // 3])
+    front = np.min(scan[n // 3: 2 * n // 3])
+    left = np.min(scan[2 * n // 3:])
+    return {"right": float(right), "front": float(front), "left": float(left)}
+
+
+def rule_policy(obs):
+    scan = obs["scan"]
+    goal = obs["goal"]
+    sectors = sector_mins(scan)
+
+    angle = math.atan2(goal[1], goal[0])
+    dist = np.linalg.norm(goal)
+
+    vx = 0.22 if dist > 0.5 else 0.12
+    vy = 0.0
+    omega = np.clip(1.2 * angle, -1.0, 1.0)
+
+    if sectors["front"] < 0.45:
+        vx = 0.0
+        omega = 0.9 if sectors["left"] > sectors["right"] else -0.9
+
+    return np.array([vx, vy, omega], dtype=np.float32)
+
+
+def rollout_score(env, obs, action):
+    pose = obs["pose"].copy()
+    goal_world = env.goal.copy()
+    last = obs["last_action"]
+
+    score = 0.0
+    min_clear = float("inf")
+    collision = False
+
+    act = np.asarray(action, dtype=np.float32)
+
+    for _ in range(8):
+        th = float(pose[2])
+        c, s = math.cos(th), math.sin(th)
+        vxw = c * act[0] - s * act[1]
+        vyw = s * act[0] + c * act[1]
+
+        pose[0] += vxw * env.dt
+        pose[1] += vyw * env.dt
+        pose[2] += act[2] * env.dt
+
+        if env.collision_at(pose[0], pose[1]):
+            collision = True
+            break
+
+        # Fast approximate clearance:
+        # Do not raycast inside every DWA rollout step.
+        # Using geometric distance is much faster for demo.
+        clearance = min(
+            [pose[0], pose[1], env.world_w - pose[0], env.world_h - pose[1]]
+            + [ob.distance_to_point(pose[0], pose[1]) for ob in env.obstacles]
+        ) - env.robot_radius
+        min_clear = min(min_clear, float(clearance))
+
+    if collision:
+        return -1e6
+
+    goal_dist = float(np.linalg.norm(goal_world - pose[:2]))
+    clear_score = min(min_clear, 1.0)
+    speed_score = float(np.linalg.norm(act[:2]))
+    smooth_penalty = float(np.linalg.norm(act - last))
+    spin_penalty = 0.3 if abs(act[2]) > 1.0 and np.linalg.norm(act[:2]) < 0.04 else 0.0
+
+    score = -2.0 * goal_dist + 1.2 * clear_score + 0.2 * speed_score - 0.3 * smooth_penalty - spin_penalty
+    return score
+
+
+def dwa_policy(env, obs):
+    candidates = []
+
+    # Fast DWA sampling for real-time demo.
+    vx_set = np.linspace(0.00, 0.30, 5)
+    vy_set = np.linspace(-0.12, 0.12, 3)
+    w_set = np.linspace(-1.0, 1.0, 5)
+
+    best_score = -1e9
+    best = np.zeros(3, dtype=np.float32)
+
+    for vx in vx_set:
+        for vy in vy_set:
+            for w in w_set:
+                a = np.array([vx, vy, w], dtype=np.float32)
+                sc = rollout_score(env, obs, a)
+                if sc > best_score:
+                    best_score = sc
+                    best = a
+
+    return best
+
+
+def mock_logoplanner_policy(obs):
+    # pretend a pretrained policy: goal-seeking but not very safe
+    goal = obs["goal"]
+    angle = math.atan2(goal[1], goal[0])
+    vx = 0.25
+    vy = 0.08 * np.tanh(goal[1])
+    w = np.clip(0.8 * angle, -1.0, 1.0)
+    return np.array([vx, vy, w], dtype=np.float32)
+
+
+def emergency_shield(obs, action):
+    scan = obs["scan"]
+    sectors = sector_mins(scan)
+    a = np.asarray(action, dtype=np.float32).copy()
+    active = False
+    reason = "normal"
+
+    if sectors["front"] < 0.35 and a[0] > 0:
+        a[0] = 0.0
+        active = True
+        reason = "front_stop"
+
+        if sectors["left"] > sectors["right"]:
+            a[2] = 0.7
+        else:
+            a[2] = -0.7
+
+    if sectors["left"] < 0.25 and a[1] > 0:
+        a[1] = 0.0
+        active = True
+        reason = "left_block"
+
+    if sectors["right"] < 0.25 and a[1] < 0:
+        a[1] = 0.0
+        active = True
+        reason = "right_block"
+
+    return a, {"active": active, "reason": reason, **sectors}
+
+
+def choose_action(env, obs, policy_name):
+    if policy_name == "rule":
+        raw = rule_policy(obs)
+        final = raw
+        shield = {"active": False, "reason": "none"}
+    elif policy_name == "dwa":
+        raw = dwa_policy(env, obs)
+        final = raw
+        shield = {"active": False, "reason": "none"}
+    elif policy_name == "dwa_shield":
+        raw = dwa_policy(env, obs)
+        final, shield = emergency_shield(obs, raw)
+    elif policy_name == "mock_logoplanner":
+        raw = mock_logoplanner_policy(obs)
+        final = raw
+        shield = {"active": False, "reason": "none"}
+    elif policy_name == "full":
+        # For now: mock LoGoPlanner + shield.
+        # Later replace this with residual model + shield.
+        raw = mock_logoplanner_policy(obs)
+        final, shield = emergency_shield(obs, raw)
+    else:
+        raw = rule_policy(obs)
+        final = raw
+        shield = {"active": False, "reason": "none"}
+
+    return final, raw, shield
+
+
+# -----------------------------
+# Visualization
+# -----------------------------
+
+class Renderer:
+    def __init__(self, display=True, record_video=False, output_dir="logs/sim_demo"):
+        self.display = display
+        self.record_video = record_video
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        import matplotlib
+        if not display:
+            matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        self.plt = plt
+        self.fig, self.ax = plt.subplots(figsize=(7, 8))
+
+        self.frames = []
+
+    def render(self, env, obs, action, raw_action, shield, episode, step, policy):
+        plt = self.plt
+        ax = self.ax
+        ax.clear()
+
+        ax.set_xlim(0, env.world_w)
+        ax.set_ylim(0, env.world_h)
+        ax.set_aspect("equal")
+        ax.set_title(f"LeKiwi 2D Navigation | {env.scene_type} | {policy}")
+        ax.grid(True, alpha=0.25)
+
+        # obstacles
+        for ob in env.obstacles:
+            rect = plt.Rectangle((ob.xmin, ob.ymin), ob.w, ob.h, color="gray", alpha=0.8)
+            ax.add_patch(rect)
+            ax.text(ob.x, ob.y, ob.name, ha="center", va="center", fontsize=8, color="white")
+
+        # trajectory
+        traj = np.array(env.trajectory)
+        if len(traj) > 1:
+            ax.plot(traj[:, 0], traj[:, 1], "b-", linewidth=2, label="trajectory")
+
+        # scan rays
+        pose = env.pose
+        scan = obs["scan"]
+        angles = np.linspace(-env.scan_fov / 2, env.scan_fov / 2, env.scan_dim)
+        for i in range(0, env.scan_dim, 4):
+            a = pose[2] + angles[i]
+            d = scan[i]
+            x2 = pose[0] + d * math.cos(a)
+            y2 = pose[1] + d * math.sin(a)
+            ax.plot([pose[0], x2], [pose[1], y2], color="orange", alpha=0.25, linewidth=0.8)
+
+        # robot
+        robot = plt.Circle((pose[0], pose[1]), env.robot_radius, color="red", alpha=0.85)
+        ax.add_patch(robot)
+        ax.arrow(
+            pose[0], pose[1],
+            0.35 * math.cos(pose[2]),
+            0.35 * math.sin(pose[2]),
+            head_width=0.08,
+            color="black",
         )
 
-        return score, {
-            "min_clearance": min_clearance,
-            "heading_error": heading_error,
-            "heading_score": heading_score,
-            "clearance_score": clearance_score,
-            "speed_score": speed_score,
-        }
+        # goal
+        ax.plot(env.goal[0], env.goal[1], "g*", markersize=18, label="goal")
+
+        # action arrow in world frame
+        th = pose[2]
+        c, s = math.cos(th), math.sin(th)
+        vxw = c * action[0] - s * action[1]
+        vyw = s * action[0] + c * action[1]
+        ax.arrow(pose[0], pose[1], vxw, vyw, color="purple", head_width=0.06, length_includes_head=True)
+
+        info = env.get_info(False, False, False)
+        txt = (
+            f"Episode: {episode}  Step: {step}\n"
+            f"Action final: [{action[0]:.2f}, {action[1]:.2f}, {action[2]:.2f}]\n"
+            f"Action raw:   [{raw_action[0]:.2f}, {raw_action[1]:.2f}, {raw_action[2]:.2f}]\n"
+            f"Shield: {shield.get('active')} | {shield.get('reason')}\n"
+            f"Front/Left/Right: {shield.get('front', 0):.2f} / {shield.get('left', 0):.2f} / {shield.get('right', 0):.2f}\n"
+            f"Dist goal: {info['dist_goal']:.2f} m\n"
+            f"Min clearance: {info['min_clearance']:.2f} m"
+        )
+        ax.text(0.03, 0.98, txt, transform=ax.transAxes, va="top",
+                bbox=dict(facecolor="white", alpha=0.85), fontsize=9)
+
+        ax.legend(loc="lower right")
+
+        if self.display:
+            plt.pause(0.001)
+
+    def save_trajectory(self, env, path):
+        plt = self.plt
+        fig, ax = plt.subplots(figsize=(7, 8))
+        ax.set_xlim(0, env.world_w)
+        ax.set_ylim(0, env.world_h)
+        ax.set_aspect("equal")
+        ax.grid(True, alpha=0.25)
+
+        for ob in env.obstacles:
+            ax.add_patch(plt.Rectangle((ob.xmin, ob.ymin), ob.w, ob.h, color="gray", alpha=0.8))
+
+        traj = np.array(env.trajectory)
+        if len(traj) > 1:
+            ax.plot(traj[:, 0], traj[:, 1], "b-", linewidth=2)
+        ax.plot(env.goal[0], env.goal[1], "g*", markersize=18)
+        ax.plot(traj[0, 0], traj[0, 1], "ro", markersize=8)
+        fig.savefig(path, dpi=160)
+        plt.close(fig)
 
 
-# ---------------------------------------------------------------------------
-# Simple residual safety controller
-# ---------------------------------------------------------------------------
-
-class SafetyResidualController:
-    """Safety residual that overrides the DWA action if danger is detected."""
-
-    def __init__(self, emergency_stop_m: float = 0.15, slow_down_m: float = 0.5):
-        self.emergency_stop_m = emergency_stop_m
-        self.slow_down_m = slow_down_m
-
-    def apply(self, action: dict, sectors: dict) -> dict:
-        """Return a (possibly modified) action dict."""
-        front_min = sectors.get("front", {}).get("min_dist", float("inf"))
-        risk = sectors.get("front", {}).get("risk", "safe")
-
-        if risk == "danger" or front_min < self.emergency_stop_m:
-            return {"x.vel": 0.0, "theta.vel": 0.0, "shield_active": True, "reason": "emergency_stop"}
-        elif risk == "warning" or front_min < self.slow_down_m:
-            factor = max(0.1, (front_min - self.emergency_stop_m) / (self.slow_down_m - self.emergency_stop_m))
-            return {
-                "x.vel": action.get("x.vel", 0.0) * factor,
-                "theta.vel": action.get("theta.vel", 0.0) * factor,
-                "shield_active": True,
-                "reason": "slow_down",
-            }
-        return {**action, "shield_active": False, "reason": "normal"}
-
-
-# ---------------------------------------------------------------------------
-# Goal generation
-# ---------------------------------------------------------------------------
-
-def generate_goal(scene_type: str, step: int, max_steps: int) -> np.ndarray:
-    """Generate a goal position in robot frame based on the scene."""
-    rng = np.random.RandomState(42 + step // max_steps)
-
-    if scene_type == "warehouse_aisle":
-        # Goal straight ahead with small lateral offset
-        gx = 2.0 + rng.uniform(-0.5, 0.5)
-        gy = rng.uniform(-0.8, 0.8)
-    elif scene_type == "lab_empty":
-        gx = rng.uniform(1.0, 2.5)
-        gy = rng.uniform(-1.0, 1.0)
-    elif scene_type == "pallet_pickup":
-        # Goal near center for pallet approach
-        gx = 1.0 + rng.uniform(-0.2, 0.2)
-        gy = rng.uniform(-0.3, 0.3)
-    elif scene_type == "cluttered_lab":
-        gx = 2.0 + rng.uniform(-0.3, 0.3)
-        gy = rng.uniform(-0.5, 0.5)
-    else:
-        gx = 1.5
-        gy = 0.0
-
-    return np.array([gx, gy], dtype=np.float32)
-
-
-# ---------------------------------------------------------------------------
-# Visualization
-# ---------------------------------------------------------------------------
-
-def visualize(
-    rgb: np.ndarray,
-    depth: np.ndarray,
-    scan: np.ndarray,
-    top_down: np.ndarray | None,
-    action: dict,
-    safety: dict,
-    step: int,
-    text: str = "",
-) -> np.ndarray:
-    """Create a 2x2 display: RGB | Depth colormap; Scan curve | Top-down map."""
-    h_rgb, w_rgb = rgb.shape[:2]
-    # --- RGB (top-left) ---
-    rgb_disp = rgb.copy() if rgb.shape[2] == 3 else cv2.cvtColor(rgb, cv2.COLOR_GRAY2BGR)
-
-    # --- Depth colormap (top-right) ---
-    # Normalize depth for display
-    depth_valid = depth[np.isfinite(depth) & (depth > 0)]
-    if len(depth_valid) > 0:
-        d_min, d_max = np.percentile(depth_valid, [5, 95])
-    else:
-        d_min, d_max = 0.0, 5.0
-    d_max = max(d_max, d_min + 0.1)
-    depth_norm = np.clip((depth - d_min) / (d_max - d_min), 0, 1)
-    depth_norm = np.nan_to_num(depth_norm, nan=0.0).astype(np.float32)
-    depth_color = cv2.applyColorMap((depth_norm * 255).astype(np.uint8), cv2.COLORMAP_JET)
-    depth_disp = cv2.resize(depth_color, (w_rgb, h_rgb))
-
-    # --- Scan curve (bottom-left) ---
-    scan_h, scan_w = h_rgb, w_rgb
-    scan_plot = np.ones((scan_h, scan_w, 3), dtype=np.uint8) * 240
-    if scan is not None and len(scan) > 0:
-        valid_scan = np.where(np.isfinite(scan), scan, np.nan)
-        max_range = np.nanmax(valid_scan) if np.any(np.isfinite(valid_scan)) else 5.0
-        max_range = max(max_range, 1.0)
-
-        # Draw grid
-        for d in np.arange(1, int(max_range) + 1):
-            y = int(scan_h * (1 - d / max_range))
-            if 0 <= y < scan_h:
-                cv2.line(scan_plot, (0, y), (scan_w, y), (200, 200, 200), 1)
-
-        # Draw scan values as bars
-        n = len(scan)
-        bar_w = max(1, scan_w // n)
-        for i, val in enumerate(scan):
-            if np.isfinite(val):
-                bar_h = int(scan_h * min(1.0, val / max_range))
-                x0 = i * bar_w
-                x1 = x0 + bar_w
-                y0 = scan_h - bar_h
-                color = (0, 180, 0) if val > 1.0 else (0, 100, 255) if val > 0.3 else (0, 0, 255)
-                cv2.rectangle(scan_plot, (x0, y0), (x1 - 1, scan_h), color, -1)
-
-        # Draw sector dividers
-        third = n // 3
-        for div in [third, 2 * third]:
-            x = div * bar_w
-            cv2.line(scan_plot, (x, 0), (x, scan_h), (100, 100, 100), 1)
-
-        # Label
-        cv2.putText(scan_plot, f"Scan (64 bins)", (5, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-
-    # --- Top-down map (bottom-right) ---
-    if top_down is None:
-        top_down = np.ones((scan_h, scan_w, 3), dtype=np.uint8) * 240
-        # Draw robot at center
-        cx, cy = scan_w // 2, scan_h // 2
-        cv2.circle(top_down, (cx, cy), 8, (0, 0, 255), -1)
-        # Draw goal as green star
-        gx_pix = cx + int(30 * action.get("goal_x", 0))
-        gy_pix = cy - int(30 * action.get("goal_y", 0))
-        cv2.circle(top_down, (gx_pix, gy_pix), 6, (0, 255, 0), -1)
-        # Draw scan obstacles
-        if scan is not None and len(scan) > 0:
-            for i, val in enumerate(scan):
-                if np.isfinite(val) and val < 3.0:
-                    angle = np.deg2rad(-87.0 / 2.0 + i * 87.0 / len(scan))
-                    px = cx + int(30 * val * np.sin(angle))
-                    py = cy - int(30 * val * np.cos(angle))
-                    if 0 <= px < scan_w and 0 <= py < scan_h:
-                        cv2.circle(top_down, (px, py), 1, (255, 0, 0), -1)
-
-    # --- Assemble 2x2 grid ---
-    row1 = np.hstack([rgb_disp, depth_disp])
-    row2 = np.hstack([scan_plot, top_down])
-    dashboard = np.vstack([row1, row2])
-
-    # --- Overlay step info ---
-    cv2.putText(dashboard, f"Step: {step}", (5, dashboard.shape[0] - 70),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-    cv2.putText(dashboard, f"vx: {action.get('x.vel', 0):.2f} m/s",
-                (5, dashboard.shape[0] - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-    cv2.putText(dashboard, f"w: {action.get('theta.vel', 0):.1f} deg/s",
-                (5, dashboard.shape[0] - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-    cv2.putText(dashboard, f"Shield: {safety.get('shield_active', False)} {safety.get('reason', '')}",
-                (5, dashboard.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
-                (0, 0, 255) if safety.get("shield_active") else (100, 100, 100), 1)
-    if text:
-        cv2.putText(dashboard, text, (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
-    return dashboard
-
-
-# ---------------------------------------------------------------------------
+# -----------------------------
 # Main
-# ---------------------------------------------------------------------------
+# -----------------------------
 
-@draccus.wrap()
-def main(cfg: SimDemoConfig) -> None:
-    """Run the sim demo:
+def main():
+    args = parse_args()
+    out = Path(args.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
 
-    1. Create synthetic scene via RealSenseReader mock mode
-    2. Initialize obstacle detector, DWA controller, safety residual
-    3. Run DWA + residual controller loop
-    4. Display RGB, depth, scan visualization, top-down view
-    5. Save video if requested
-    """
-    # Create output directory
-    out_dir = Path(cfg.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    rng = np.random.RandomState(args.seed)
 
-    # Initialize mock camera reader for synthetic scene generation
-    scene_map = {
-        "warehouse_aisle": "corridor",
-        "lab_empty": "empty",
-        "pallet_pickup": "pallet_marker",
-        "cluttered_lab": "cluttered_lab",
-    }
-    mock_scene = scene_map.get(cfg.scene_type, "corridor")
+    renderer = Renderer(args.display, args.record_video, args.output_dir)
 
-    reader = RealSenseReader(
-        mock=True,
-        width=480,
-        height=640,
-        fps=15,
-        scene=mock_scene,
-    )
-    reader.start()
+    metrics = []
 
-    # Initialize perception
-    obstacle_detector = ObstacleDetector(
-        scan_dim=64,
-        safe_threshold=1.0,
-        warning_threshold=0.5,
-        danger_threshold=0.2,
-    )
+    for ep in range(args.num_episodes):
+        env = LeKiwi2DEnv(scene_type=args.scene_type, seed=args.seed + ep, max_steps=args.max_steps)
+        obs, info = env.reset()
 
-    # Initialize controllers
-    dwa = DWAController()
-    safety_controller = SafetyResidualController()
+        shield_count = 0
+        raw_smooth = 0.0
+        last_raw = np.zeros(3, dtype=np.float32)
 
-    # Video writer
-    video_writer = None
-    if cfg.record_video:
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        video_path = str(out_dir / f"sim_demo_{cfg.scene_type}.mp4")
-        video_writer = cv2.VideoWriter(video_path, fourcc, 15.0, (960, 1280))
-        logger.info("Recording video to %s", video_path)
+        done = False
+        final_info = None
 
-    for episode in range(cfg.num_episodes):
-        logger.info("=== Episode %d/%d ===", episode + 1, cfg.num_episodes)
+        for step in range(args.max_steps):
+            action, raw_action, shield = choose_action(env, obs, args.policy)
+            if shield.get("active"):
+                shield_count += 1
 
-        # Generate a goal for this episode
-        goal = generate_goal(cfg.scene_type, episode * cfg.max_steps, cfg.max_steps * cfg.num_episodes)
+            raw_smooth += float(np.linalg.norm(raw_action - last_raw))
+            last_raw = raw_action.copy()
 
-        # Simple scan simulation from depth image
-        prev_scan_raw: np.ndarray | None = None
+            obs, reward, done, truncated, info = env.step(action)
 
-        for step in range(cfg.max_steps):
-            loop_start = time.perf_counter()
+            if args.display or args.record_video:
+                renderer.render(env, obs, action, raw_action, shield, ep + 1, step, args.policy)
 
-            # Read synthetic frame
-            frame = reader.read()
-            rgb = frame["color"]  # BGR, HxWx3
-            depth_m = frame["depth"]  # float32 meters, HxW
-
-            # Convert depth to pseudo-scan (simplified: take min in vertical columns)
-            h, w = depth_m.shape
-            scan_dim = 64
-            col_width = max(1, w // scan_dim)
-            scan_m = np.full(scan_dim, np.nan, dtype=np.float32)
-            for i in range(scan_dim):
-                x0 = i * col_width
-                x1 = min(w, x0 + col_width)
-                col = depth_m[h // 2 - 20:h // 2 + 20, x0:x1]
-                valid = col[np.isfinite(col) & (col > 0.01)]
-                if len(valid) > 0:
-                    scan_m[i] = float(np.percentile(valid, 10))
-
-            # EMA smoothing
-            if prev_scan_raw is not None:
-                alpha = 0.5
-                smoothed = np.where(
-                    np.isnan(scan_m) & ~np.isnan(prev_scan_raw),
-                    prev_scan_raw,
-                    np.where(~np.isnan(scan_m) & np.isnan(prev_scan_raw),
-                             scan_m,
-                             alpha * scan_m + (1 - alpha) * prev_scan_raw),
-                )
-                scan_m = smoothed.astype(np.float32)
-            prev_scan_raw = scan_m.copy()
-
-            # Obstacle detection on scan
-            obs_result = obstacle_detector.detect(np.nan_to_num(scan_m, nan=5.0))
-
-            # DWA planning
-            action = dwa.plan(goal[0], goal[1], scan_m)
-
-            # Safety residual
-            safe_action = safety_controller.apply(action, obs_result["sectors"])
-
-            # Store goal info for visualization
-            safe_action["goal_x"] = float(goal[0])
-            safe_action["goal_y"] = float(goal[1])
-
-            # Visualization
-            if cfg.display or video_writer is not None:
-                top_down_map = None  # Will be generated in visualize()
-                vis = visualize(
-                    rgb=rgb,
-                    depth=depth_m,
-                    scan=scan_m,
-                    top_down=top_down_map,
-                    action=safe_action,
-                    safety={
-                        "shield_active": safe_action.get("shield_active", False),
-                        "reason": safe_action.get("reason", "normal"),
-                    },
-                    step=step,
-                    text=f"Episode {episode + 1}/{cfg.num_episodes}",
-                )
-
-                if cfg.display:
-                    cv2.imshow("LeKiwi Sim Demo", vis)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        reader.stop()
-                        cv2.destroyAllWindows()
-                        return
-
-                if video_writer is not None:
-                    video_writer.write(vis)
-
-            # Check if goal reached (within 0.3m)
-            dist_to_goal = np.hypot(goal[0], goal[1])
-            if dist_to_goal < 0.3:
-                logger.info("  Goal reached at step %d", step)
+            if done:
+                final_info = info
                 break
 
-            # Maintain loop rate
-            elapsed = time.perf_counter() - loop_start
-            target_period = 1.0 / 15.0
-            if elapsed < target_period:
-                time.sleep(target_period - elapsed)
+        if final_info is None:
+            final_info = info
 
-        logger.info("  Episode finished after %d steps", min(step + 1, cfg.max_steps))
+        row = {
+            "episode": ep,
+            "scene": args.scene_type,
+            "policy": args.policy,
+            "success": int(final_info["success"]),
+            "collision": int(final_info["collision"]),
+            "timeout": int(final_info["timeout"]),
+            "steps": final_info["step"],
+            "path_length": final_info["path_length"],
+            "min_clearance_seen": final_info["min_clearance_seen"],
+            "smoothness": final_info["smoothness"],
+            "raw_smoothness": raw_smooth,
+            "spin_count": final_info["spin_count"],
+            "shield_count": shield_count,
+            "dist_goal": final_info["dist_goal"],
+        }
+        metrics.append(row)
 
-    # Cleanup
-    reader.stop()
-    if video_writer is not None:
-        video_writer.release()
-        logger.info("Video saved.")
-    if cfg.display:
-        cv2.destroyAllWindows()
-    logger.info("Sim demo finished. Output in %s", out_dir)
+        print(
+            f"[ep {ep+1}/{args.num_episodes}] "
+            f"success={row['success']} collision={row['collision']} timeout={row['timeout']} "
+            f"steps={row['steps']} min_clear={row['min_clearance_seen']:.2f} "
+            f"shield={row['shield_count']}"
+        )
+
+        if ep == 0:
+            renderer.save_trajectory(env, out / "sim_demo_trajectory.png")
+
+    # Save metrics
+    csv_path = out / "sim_demo_metrics.csv"
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(metrics[0].keys()))
+        writer.writeheader()
+        writer.writerows(metrics)
+
+    # Print summary
+    success_rate = np.mean([m["success"] for m in metrics])
+    collision_rate = np.mean([m["collision"] for m in metrics])
+    timeout_rate = np.mean([m["timeout"] for m in metrics])
+    avg_min_clear = np.mean([m["min_clearance_seen"] for m in metrics])
+    avg_smooth = np.mean([m["smoothness"] for m in metrics])
+
+    print("\n=== Summary ===")
+    print(f"success_rate:  {success_rate:.2f}")
+    print(f"collision_rate:{collision_rate:.2f}")
+    print(f"timeout_rate:  {timeout_rate:.2f}")
+    print(f"avg_min_clear: {avg_min_clear:.2f} m")
+    print(f"avg_smooth:    {avg_smooth:.2f}")
+    print(f"metrics saved: {csv_path}")
+
+    # Save bar chart
+    import matplotlib
+    if not args.display:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    names = ["success", "collision", "timeout"]
+    vals = [success_rate, collision_rate, timeout_rate]
+    ax.bar(names, vals)
+    ax.set_ylim(0, 1.0)
+    ax.set_title("Navigation Metrics")
+    ax.set_ylabel("Rate")
+    fig.tight_layout()
+    fig.savefig(out / "sim_demo_bar_chart.png", dpi=160)
+    plt.close(fig)
 
 
 if __name__ == "__main__":

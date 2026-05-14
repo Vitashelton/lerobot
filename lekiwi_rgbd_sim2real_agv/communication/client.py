@@ -52,7 +52,7 @@ from lerobot.robots.robot import Robot
 from lerobot.utils.constants import ACTION, OBS_STATE
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
-from .lekiwi_d435i_config import LeKiwiD435iClientConfig
+from .config import LeKiwiD435iClientConfig
 
 logger = logging.getLogger(__name__)
 
@@ -150,8 +150,8 @@ class LeKiwiD435iClient(Robot):
 
     Usage::
 
-        from lerobot_ext.lekiwi_d435i_config import LeKiwiD435iClientConfig
-        from lerobot_ext.lekiwi_d435i_client import LeKiwiD435iClient
+        from communication.config import LeKiwiD435iClientConfig
+        from communication.client import LeKiwiD435iClient
 
         cfg = LeKiwiD435iClientConfig(remote_ip="192.168.1.100")
         client = LeKiwiD435iClient(cfg)

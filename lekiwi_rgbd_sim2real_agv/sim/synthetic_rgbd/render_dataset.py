@@ -21,7 +21,6 @@ Output structure::
         dataset_info.json
 """
 
-from __future__ import annotations
 
 import json
 import os
@@ -96,7 +95,7 @@ def _serialize_annotation(annotation: dict) -> dict:
     return out
 
 
-@wrap
+@wrap()
 def main(cfg: SyntheticDatasetConfig):
     """Generate the synthetic dataset.
 

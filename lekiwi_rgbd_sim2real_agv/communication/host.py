@@ -35,7 +35,7 @@ Run this on the on-board computer:
 
 .. code-block:: bash
 
-    python lerobot_ext/lekiwi_d435i_host.py \
+    python communication/host.py \
         --robot.type lekiwi_d435i \
         --port_zmq_cmd 5555 \
         --port_zmq_observations 5556
@@ -67,7 +67,7 @@ except ImportError:
 from lerobot.cameras.utils import make_cameras_from_configs
 
 # Project-local configs
-from .lekiwi_d435i_config import (
+from .config import (
     LeKiwiD435iConfig,
     LeKiwiD435iHostConfig,
 )

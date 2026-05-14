@@ -17,7 +17,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from camera.realsense_reader import RealSenseReader
+from perception.realsense_reader import RealSenseReader
 from perception.obstacle_detector import ObstacleDetector
 
 logger = logging.getLogger(__name__)

@@ -1,0 +1,103 @@
+% LaTeX skeleton for ICRA/IROS submission
+% Requires: icra2025.cls or IEEEtran.cls
+% Compile: pdflatex -> bibtex -> pdflatex -> pdflatex
+
+\documentclass[letterpaper, 10pt, twocolumn]{IEEEtran}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{algorithm}
+\usepackage{algorithmicx}
+\usepackage{algpseudocode}
+\usepackage{hyperref}
+\usepackage{cite}
+
+\begin{document}
+
+\title{LeRobot-Compatible RGB-D Residual Safety Navigation for Low-Cost Mobile Robots}
+
+\author{
+    \IEEEauthorblockN{Anonymous Author(s)}
+    \IEEEauthorblockA{Anonymous Institution\\
+    Anonymous City, Anonymous Country\\
+    Email: anonymous@anonymous.com}
+}
+
+\maketitle
+
+\begin{abstract}
+Safe navigation under RGB-D perception noise remains a critical challenge for low-cost mobile robots deployed in unstructured indoor environments. We present a LeRobot-compatible residual safety navigation framework for the LeKiwi omnidirectional mobile platform equipped with an Intel RealSense D435i camera. [Full abstract in Markdown draft.]
+\end{abstract}
+
+% Sections follow the structure in icra_paper_draft.md
+% I. Introduction
+% II. Related Work
+% III. System Design
+% IV. Method
+% V. Experiments
+% VI. Conclusion
+% Appendix
+% References
+
+% Key equations to insert:
+
+% --- DWA Cost Function ---
+% \begin{equation}
+% J_{\text{DWA}}(\tau) = w_g \cdot J_g(\tau) + w_c \cdot J_c(\tau) + w_s \cdot J_s(\tau) + w_h \cdot J_h(\tau)
+% \end{equation}
+
+% --- Residual Update ---
+% \begin{equation}
+% a_t^{\text{res}} = \text{clip}\left(a_t^0 + \Delta a_\theta(s_t, g_t, x_t, a_t^0, a_{t-1}^{\text{exec}}), a_{\min}, a_{\max}\right)
+% \end{equation}
+
+% --- Emergency Shield ---
+% \begin{equation}
+% a_t^{\text{safe}} = \begin{cases}
+% 0, & \text{if } d_{\min} < d_{\text{stop}} \\
+% \lambda(d_{\min}) \cdot a_t, & \text{if } d_{\text{stop}} \le d_{\min} < d_{\text{slow}} \\
+% a_t, & \text{otherwise}
+% \end{cases}
+% \end{equation}
+
+% --- Training Loss ---
+% \begin{equation}
+% \mathcal{L} = \mathcal{L}_{\text{res}} + \lambda_{\text{safe}} \mathcal{L}_{\text{safe}} + \lambda_{\text{smooth}} \mathcal{L}_{\text{smooth}} + \lambda_{\text{collision}} \mathcal{L}_{\text{collision}}
+% \end{equation}
+
+% --- Percentile Pooling ---
+% \begin{equation}
+% s_i = Q_p(\{d \in B_i \mid d_{\min} < d < d_{\max}\})
+% \end{equation}
+
+% --- EMA Smoothing ---
+% \begin{equation}
+% a_t^{\text{exec}} = \alpha \cdot \tilde{a}_t + (1 - \alpha) \cdot a_{t-1}^{\text{exec}}
+% \end{equation}
+
+% See icra_paper_draft.md for complete text, all equations, tables, and algorithms.
+% This .tex file provides the structural skeleton for conversion.
+
+\bibliographystyle{IEEEtran}
+\begin{thebibliography}{99}
+
+\bibitem{lerobot2024}
+R.~Cadene, S.~Alibert, A.~So, et al.,
+``LeRobot: State-of-the-art AI for real-world robotics,''
+Hugging Face, 2024.
+
+\bibitem{fox1997dwa}
+D.~Fox, W.~Burgard, and S.~Thrun,
+``The dynamic window approach to collision avoidance,''
+\textit{IEEE Robotics \& Automation Magazine}, vol.~4, no.~1, pp.~23--33, 1997.
+
+% ... (full reference list in Markdown draft)
+
+\end{thebibliography}
+
+\end{document}

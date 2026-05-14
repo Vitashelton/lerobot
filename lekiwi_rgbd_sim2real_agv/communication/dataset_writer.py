@@ -65,7 +65,7 @@ Depth sidecar images are saved as 16-bit unsigned PNG.
 
 Usage::
 
-    from lerobot_ext.lerobot_dataset_writer import LeKiwiDatasetWriter
+    from communication.dataset_writer import LeKiwiDatasetWriter
 
     writer = LeKiwiDatasetWriter("data/lekiwi_rgbd_agv", fps=15)
     writer.start_episode()

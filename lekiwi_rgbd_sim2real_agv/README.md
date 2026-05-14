@@ -19,19 +19,19 @@ Synthetic RGB-D → MuJoCo/Gym LeKiwi → LeRobotDataset → residual safety mod
 
 ### Key Features
 
-| Module | Description |
-|--------|-------------|
-| **D435i Depth-to-Scan** | Convert RealSense depth to 64-D polar scan with percentile pooling |
-| **Obstacle Detection** | Left/front/right sector risk assessment from depth scan |
-| **ArUco Pallet Localization** | 3D pallet pose estimation via ArUco markers + depth |
-| **YOLO Detection** | Object detection (person, box, chair) with depth localization |
-| **Synthetic RGB-D** | Procedural warehouse/lab scene generator with depth noise |
-| **MuJoCo LeKiwi Env** | Gymnasium env for omniwheel AGV with scan observation |
-| **Residual Safety Model** | Small MLP that predicts safety corrections to raw actions |
-| **DWA Policy** | Dynamic Window Approach for omnidirectional navigation |
-| **Emergency Shield** | Hard safety layer: stop, slow-down, lateral inhibit |
-| **Web Dashboard** | Flask-based real-time monitoring (RGB, depth, scan, FPS) |
-| **LeRobotDataset Writer** | Record data in LeRobot-compatible format |
+| Module                        | Description                                                        |
+| ----------------------------- | ------------------------------------------------------------------ |
+| **D435i Depth-to-Scan**       | Convert RealSense depth to 64-D polar scan with percentile pooling |
+| **Obstacle Detection**        | Left/front/right sector risk assessment from depth scan            |
+| **ArUco Pallet Localization** | 3D pallet pose estimation via ArUco markers + depth                |
+| **YOLO Detection**            | Object detection (person, box, chair) with depth localization      |
+| **Synthetic RGB-D**           | Procedural warehouse/lab scene generator with depth noise          |
+| **MuJoCo LeKiwi Env**         | Gymnasium env for omniwheel AGV with scan observation              |
+| **Residual Safety Model**     | Small MLP that predicts safety corrections to raw actions          |
+| **DWA Policy**                | Dynamic Window Approach for omnidirectional navigation             |
+| **Emergency Shield**          | Hard safety layer: stop, slow-down, lateral inhibit                |
+| **Web Dashboard**             | Flask-based real-time monitoring (RGB, depth, scan, FPS)           |
+| **LeRobotDataset Writer**     | Record data in LeRobot-compatible format                           |
 
 ## Project Structure
 
@@ -68,14 +68,14 @@ pip install -e ".[all]"          # everything
 
 ### Dependencies
 
-| Extra | Packages | Purpose |
-|-------|----------|---------|
-| (core) | `numpy`, `opencv-python`, `pyzmq`, `draccus`, `scipy`, `tqdm` | Always required |
-| `[camera]` | `pyrealsense2` | Real D435i depth streaming |
-| `[sim]` | `gymnasium`, `mujoco` | Simulation environments |
-| `[learning]` | `torch` | Residual safety model training |
-| `[detection]` | `ultralytics` | YOLO object detection |
-| `[dash]` | `flask` | Web monitoring dashboard |
+| Extra         | Packages                                                      | Purpose                        |
+| ------------- | ------------------------------------------------------------- | ------------------------------ |
+| (core)        | `numpy`, `opencv-python`, `pyzmq`, `draccus`, `scipy`, `tqdm` | Always required                |
+| `[camera]`    | `pyrealsense2`                                                | Real D435i depth streaming     |
+| `[sim]`       | `gymnasium`, `mujoco`                                         | Simulation environments        |
+| `[learning]`  | `torch`                                                       | Residual safety model training |
+| `[detection]` | `ultralytics`                                                 | YOLO object detection          |
+| `[dash]`      | `flask`                                                       | Web monitoring dashboard       |
 
 LeRobot itself (`lerobot`) must be installed in the environment — this project extends it, not replaces it.
 
@@ -251,6 +251,14 @@ The safety stack has three layers:
 
 5. **Simulation-first training**: Synthetic data + MuJoCo provide large-scale training data before real-world validation.
 
+## Addition
+If TypeError: must be called with a dataclass type or instance
+```bash
+PYTHONPATH=$PWD python -m sim.synthetic_rgbd.render_dataset \
+    --output_dir data/synthetic \
+    --num_scenes 1000 \
+    --seed 42
+```
 ## License
 
 Apache 2.0 (same as LeRobot)
